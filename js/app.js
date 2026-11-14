@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261114-1743'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261114-2335'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -223,7 +223,7 @@ function renderRecent() {
     var delLabel = r.status === 'saved' ? 'ลบ' : 'ลบออก';
     return '<div class="row st-' + r.status + '">' +
       '<div class="row-main">' +
-        '<div class="row-top"><b class="part">' + esc(r.part_code || r.qr_raw) + '</b><span class="tag ' + r.status + '">' + STATUS_TEXT[r.status] + '</span></div>' +
+        '<div class="row-top">' + partLink(r, r.status === 'saved') + '<span class="tag ' + r.status + '">' + STATUS_TEXT[r.status] + '</span></div>' +
         '<div class="row-sub">' +
           locChip(r, r.status === 'pending' || r.status === 'saved', 'data-loc-edit') +
           (r.lot_no ? '<span>Lot ' + esc(r.lot_no) + '</span>' : '') +
@@ -251,6 +251,7 @@ function renderRecent() {
   Array.prototype.forEach.call(el.querySelectorAll('[data-qty]'), function (b) {
     b.onclick = function () { editRecentQty(b.getAttribute('data-qty')); };
   });
+  bindTimelineLinks(el);
   Array.prototype.forEach.call(el.querySelectorAll('[data-loc-edit]'), function (b) {
     b.onclick = function () { editRecentLocation(b.getAttribute('data-loc-edit')); };
   });
@@ -812,7 +813,7 @@ function renderHistoryList() {
       var del = r.status === 'deleted';
       return '<div class="row ' + (del ? 'st-deleted' : '') + '">' +
         '<div class="row-main">' +
-          '<div class="row-top"><b class="part">' + esc(r.part_code || r.qr_raw) + '</b>' + (del ? '<span class="tag deleted">ลบแล้ว</span>' : '') + '</div>' +
+          '<div class="row-top">' + partLink(r, true) + (del ? '<span class="tag deleted">ลบแล้ว</span>' : '') + '</div>' +
           '<div class="row-sub">' + locChip(r, !del, 'data-hloc') +
             (r.lot_no ? '<span>Lot ' + esc(r.lot_no) + '</span>' : '') +
             qtyChip(r, !del, 'data-hqty') + photoChip(r.scan_id, r) + '</div>' +
@@ -824,6 +825,7 @@ function renderHistoryList() {
       '</div>';
     }).join('');
   bindPhotoButtons(el, function (id) { return d.rows.filter(function (x) { return x.scan_id === id; })[0] || null; });
+  bindTimelineLinks(el);
   Array.prototype.forEach.call(el.querySelectorAll('[data-hloc]'), function (b) {
     b.onclick = function () { editHistoryLocation(d.rows.filter(function (x) { return x.scan_id === b.getAttribute('data-hloc'); })[0]); };
   });
@@ -1197,6 +1199,107 @@ function saveManual() {
   refreshScanParts();
   flush();
   $('mfPart').focus();
+}
+
+// ======================= Timeline ประวัติของแต่ละรายการ =======================
+var TL_EVENTS = {
+  create: { icon: '🟢', cls: 'ev-create', label: 'บันทึก' },
+  qty: { icon: '🔵', cls: 'ev-qty', label: 'แก้ยอด' },
+  move: { icon: '🟠', cls: 'ev-move', label: 'ย้าย Location' },
+  delete: { icon: '🔴', cls: 'ev-delete', label: 'ลบ' },
+  photo_add: { icon: '🖼', cls: 'ev-photo', label: 'แนบรูป' },
+  photo_delete: { icon: '🗑', cls: 'ev-photo', label: 'ลบรูป' }
+};
+
+function partLink(r, clickable) {
+  var name = esc(r.part_code || r.qr_raw);
+  return clickable ? '<button class="part part-link" data-tl="' + esc(r.scan_id) + '">' + name + ' <span class="tl-ico">🕘</span></button>' : '<b class="part">' + name + '</b>';
+}
+
+function bindTimelineLinks(el) {
+  Array.prototype.forEach.call(el.querySelectorAll('[data-tl]'), function (b) {
+    b.onclick = function () { openTimeline(b.getAttribute('data-tl')); };
+  });
+}
+
+function tlDetail(e) {
+  var u = e.unit || '';
+  switch (e.event) {
+    case 'create': return 'ที่ <b>' + esc(e.location_to) + '</b>' + (e.qty_to !== '' ? ' · ' + esc(fmtQty(e.qty_to, u)) : '');
+    case 'qty': return esc(fmtQty(e.qty_from, u)) + ' → <b>' + esc(fmtQty(e.qty_to, u)) + '</b>';
+    case 'move': return esc(e.location_from) + ' → <b>' + esc(e.location_to) + '</b>';
+    case 'delete': return e.location_from ? 'จาก ' + esc(e.location_from) : '';
+    default: return '';
+  }
+}
+
+function fmtWhen(at) {
+  if (!at) return 'ไม่ทราบเวลา';
+  var m = String(at).match(/^(\d{4})-(\d\d)-(\d\d) (\d\d:\d\d)/);
+  if (!m) return esc(at);
+  var mon = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'][Number(m[2]) - 1];
+  return Number(m[3]) + ' ' + mon + ' ' + (Number(m[1]) + 543) % 100 + ' · ' + m[4];
+}
+
+function openTimeline(scanId, back) {
+  openModal('<h3>ประวัติรายการ</h3><div class="center muted pad">กำลังโหลด…</div>' +
+    '<div class="actions"><button class="btn" id="mCancel">ปิด</button></div>');
+  $('mCancel').onclick = closeModal;
+  api('getTimeline', scanId).then(function (d) {
+    if ($('modal').classList.contains('hidden')) return;
+    var r = d.record, del = r.status === 'deleted';
+    var head = '<div class="tl-head' + (del ? ' deleted' : '') + '">' +
+      '<div class="tl-part">' + esc(r.part_code || r.qr_raw) + '</div>' +
+      '<div class="row-sub">' + (r.lot_no ? '<span>Lot ' + esc(r.lot_no) + '</span>' : '') + (r.pkg_ref ? '<span>Pkg ' + esc(r.pkg_ref) + '</span>' : '') + '</div>' +
+      '<div class="tl-now">' + (del ? '<span class="tag deleted">ลบแล้ว</span>'
+        : 'ตอนนี้อยู่ <span class="loc-pill">' + esc(r.location) + '</span> · <b>' + esc(fmtQty(r.qty, r.unit) || '-') + '</b>') + '</div></div>';
+    var list = d.events.map(function (e) {
+      var t = TL_EVENTS[e.event] || { icon: '•', cls: '', label: e.event };
+      return '<li class="tl-item ' + t.cls + '"><span class="tl-dot">' + t.icon + '</span>' +
+        '<div class="tl-body"><div class="tl-top"><b>' + t.label + '</b><span class="muted small">' + fmtWhen(e.at) + '</span></div>' +
+        (tlDetail(e) ? '<div>' + tlDetail(e) + '</div>' : '') +
+        '<div class="muted small">' + (e.by ? '👤 ' + esc(e.by) : '') + (e.note ? ' · ' + esc(e.note) : '') + (e.legacy ? ' · <i>ข้อมูลย้อนหลัง</i>' : '') + '</div>' +
+        '</div></li>';
+    }).join('');
+    $('modal').querySelector('.sheet').innerHTML = '<h3>ประวัติรายการ</h3>' + head +
+      '<ul class="timeline">' + (list || '<li class="muted">ไม่มีประวัติ</li>') + '</ul>' +
+      (d.legacy ? '<p class="muted small">รายการนี้บันทึกก่อนเริ่มเก็บประวัติเต็ม — การแก้ไขระหว่างทางก่อนหน้านั้นอาจไม่ครบ</p>' : '') +
+      '<div class="actions wrap">' + (r.part_code ? '<button class="btn" id="tlPart">📦 ดูทุกกล่องของพาร์ทนี้</button>' : '') + '</div>' +
+      '<div class="actions">' + (back ? '<button class="btn" id="tlBack">← กลับ</button>' : '') + '<button class="btn" id="mCancel">ปิด</button></div>';
+    $('mCancel').onclick = closeModal;
+    if ($('tlBack')) $('tlBack').onclick = back;
+    if ($('tlPart')) $('tlPart').onclick = function () { openPartPackages(r.part_code, function () { openTimeline(scanId, back); }); };
+  }, function (err) {
+    var sh = $('modal').querySelector('.sheet');
+    if (sh) sh.innerHTML = '<h3>ประวัติรายการ</h3><div class="msg err">' + esc(err.message) + '</div><div class="actions"><button class="btn" id="mCancel">ปิด</button></div>';
+    if ($('mCancel')) $('mCancel').onclick = closeModal;
+  });
+}
+
+function openPartPackages(partCode, back) {
+  openModal('<h3>ทุกกล่องของ ' + esc(partCode) + '</h3><div class="center muted pad">กำลังโหลด…</div>' +
+    '<div class="actions"><button class="btn" id="mCancel">ปิด</button></div>');
+  $('mCancel').onclick = closeModal;
+  api('getPartPackages', partCode).then(function (d) {
+    if ($('modal').classList.contains('hidden')) return;
+    var totals = Object.keys(d.totals).map(function (u) { return esc(fmtQty(d.totals[u], u === '-' ? '' : u)); }).join(' + ') || '-';
+    var rows = d.rows.map(function (r) {
+      return '<button class="pkg-row" data-pkg="' + esc(r.scan_id) + '">' +
+        '<span class="loc-pill">' + esc(r.location) + '</span>' +
+        '<span class="pkg-mid">' + (r.lot_no ? 'Lot ' + esc(r.lot_no) : '') + (r.pkg_ref ? ' · Pkg ' + esc(r.pkg_ref) : '') + '</span>' +
+        '<b>' + esc(fmtQty(r.qty, r.unit) || '-') + '</b></button>';
+    }).join('');
+    $('modal').querySelector('.sheet').innerHTML = '<h3>ทุกกล่องของ ' + esc(d.part_code) + '</h3>' +
+      '<div class="stats"><div><b>' + d.rows.length + '</b><span>กล่อง</span></div><div><b>' + d.locationCount + '</b><span>Location</span></div>' +
+      '<div><b class="small-num">' + totals + '</b><span>ยอดรวม</span></div></div>' +
+      (rows ? '<div class="pkg-list">' + rows + '</div><p class="muted small">แตะกล่องเพื่อดูประวัติ</p>' : '<div class="empty-list muted">ไม่มีกล่องที่ใช้งานอยู่</div>') +
+      '<div class="actions">' + (back ? '<button class="btn" id="tlBack">← กลับ</button>' : '') + '<button class="btn" id="mCancel">ปิด</button></div>';
+    $('mCancel').onclick = closeModal;
+    if ($('tlBack')) $('tlBack').onclick = back;
+    Array.prototype.forEach.call($('modal').querySelectorAll('[data-pkg]'), function (b) {
+      b.onclick = function () { openTimeline(b.getAttribute('data-pkg'), function () { openPartPackages(partCode, back); }); };
+    });
+  }, function (err) { toast(err.message, 3500); closeModal(); });
 }
 
 // ======================= รูปถ่าย =======================

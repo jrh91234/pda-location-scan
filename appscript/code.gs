@@ -16,7 +16,7 @@ const TZ = 'Asia/Bangkok';
 const MAX_BATCH = 50;
 
 // ======================= Web App =======================
-const API_ACTIONS = { ping: ping, saveScans: saveScans, listScans: listScans, deleteScan: deleteScan, updateQty: updateQty, updateLocation: updateLocation, findByQr: findByQr, getScans: getScans,
+const API_ACTIONS = { ping: ping, saveScans: saveScans, listScans: listScans, deleteScan: deleteScan, updateQty: updateQty, updateLocation: updateLocation, findByQr: findByQr, getScans: getScans, getTimeline: getTimeline, getPartPackages: getPartPackages,
   uploadPhoto: uploadPhoto, getPhoto: getPhoto, deletePhoto: deletePhoto };
 
 function doPost(e) {
@@ -48,6 +48,7 @@ function onOpen() {
 function setupFromMenu() {
   setup_();
   photoSheet_();
+  logSheet_();
   const folder = photoFolder_(); // ขอสิทธิ์ Google Drive สำหรับเก็บรูป
   SpreadsheetApp.getUi().alert('พร้อมใช้งาน: ชีต "' + SHEET_NAME + '", "' + PHOTO_SHEET + '" และโฟลเดอร์รูป "' + folder.getName() + '"');
 }
@@ -198,6 +199,11 @@ function saveScans(items) {
 
     if (toAppend.length) {
       sh.getRange(sh.getLastRow() + 1, 1, toAppend.length, HEADERS.length).setValues(toAppend);
+      logEvents_(results.filter(function (r) { return r.result === 'saved'; }).map(function (r) {
+        const x = r.record;
+        return { scan_id: x.scan_id, event: 'create', part_code: x.part_code, qr_raw: x.qr_raw,
+                 location_to: x.location, qty_to: x.qty, unit: x.unit, by: x.scanned_by, at: now, note: x.device ? 'เครื่อง ' + x.device : '' };
+      }));
     }
     return results;
   } finally {
@@ -273,11 +279,14 @@ function updateQty(scanId, qty, editedBy, note) {
     if (!row) throw new Error('ไม่พบรายการนี้ในระบบ');
     if (String(row.status) === 'deleted') throw new Error('รายการนี้ถูกลบแล้ว แก้ยอดไม่ได้');
     const now = new Date();
+    const prevQty = row.qty;
     const orig = row.qty_original === '' || row.qty_original == null ? row.qty : row.qty_original;
     row.qty = n; row.qty_original = orig; row.edited_by = by; row.edited_at = now; row.edit_note = clean_(note, 200);
     sh.getRange(row._row, HEADERS.indexOf('qty') + 1).setValue(n);
     const c = HEADERS.indexOf('qty_original') + 1;
     sh.getRange(row._row, c, 1, 4).setValues([[orig, by, now, row.edit_note]]);
+    logEvents_([{ scan_id: id, event: 'qty', part_code: row.part_code, qr_raw: row.qr_raw, location_to: row.location,
+                  qty_from: prevQty, qty_to: n, unit: row.unit, by: by, at: now, note: row.edit_note }]);
     return toClient_(row);
   } finally {
     lock.releaseLock();
@@ -303,11 +312,14 @@ function updateLocation(scanId, location, editedBy, note) {
     if (String(row.status) === 'deleted') throw new Error('รายการนี้ถูกลบแล้ว ย้าย Location ไม่ได้');
     if (String(row.location) === loc) return toClient_(row);
     const now = new Date();
+    const prevLoc = String(row.location);
     const orig = String(row.location_original || '') || String(row.location);
     const n = clean_(note, 200);
     row.location = loc; row.location_original = orig; row.edited_by = by; row.edited_at = now; row.edit_note = n;
     sh.getRange(row._row, HEADERS.indexOf('location') + 1).setValue(loc);
     sh.getRange(row._row, HEADERS.indexOf('edited_by') + 1, 1, 4).setValues([[by, now, n, orig]]);
+    logEvents_([{ scan_id: id, event: 'move', part_code: row.part_code, qr_raw: row.qr_raw, location_from: prevLoc,
+                  location_to: loc, qty_to: row.qty, unit: row.unit, by: by, at: now, note: n }]);
     const ps = book_().getSheetByName(PHOTO_SHEET);
     if (ps) readPhotos_(ps).forEach(function (p) {
       if (String(p.scan_id) === id) ps.getRange(p._row, PHOTO_HEADERS.indexOf('location') + 1).setValue(loc);
@@ -335,6 +347,8 @@ function deleteScan(scanId, deletedBy, reason) {
     const now = new Date();
     sh.getRange(row._row, c, 1, 4).setValues([['deleted', by, now, clean_(reason, 200)]]);
     row.status = 'deleted'; row.deleted_by = by; row.deleted_at = now; row.delete_reason = clean_(reason, 200);
+    logEvents_([{ scan_id: id, event: 'delete', part_code: row.part_code, qr_raw: row.qr_raw, location_from: row.location,
+                  qty_from: row.qty, unit: row.unit, by: by, at: now, note: row.delete_reason }]);
     return toClient_(row);
   } finally {
     lock.releaseLock();
@@ -422,6 +436,7 @@ function uploadPhoto(p) {
     const rec = { photo_id: id, scan_id: scanId, location: loc, part_code: part, file_id: file.getId(), file_url: file.getUrl(),
                   uploaded_at: now, uploaded_by: by, status: 'active', deleted_by: '', deleted_at: '' };
     sh.getRange(sh.getLastRow() + 1, 1, 1, PHOTO_HEADERS.length).setValues([PHOTO_HEADERS.map(function (h) { return rec[h]; })]);
+    logEvents_([{ scan_id: scanId, event: 'photo_add', part_code: part, location_to: loc, by: by, at: now, ref: id }]);
     return { photo_id: id, scan_id: scanId, result: 'saved' };
   } finally {
     lock.releaseLock();
@@ -451,9 +466,134 @@ function deletePhoto(photoId, deletedBy) {
     if (String(row.status) !== 'deleted') {
       sh.getRange(row._row, PHOTO_HEADERS.indexOf('status') + 1, 1, 3).setValues([['deleted', by, new Date()]]);
       try { DriveApp.getFileById(String(row.file_id)).setTrashed(true); } catch (e) { /* ไฟล์หายไปแล้ว */ }
+      logEvents_([{ scan_id: String(row.scan_id), event: 'photo_delete', part_code: String(row.part_code), location_to: String(row.location),
+                    by: by, at: new Date(), ref: id }]);
     }
     return { photo_id: id, status: 'deleted' };
   } finally {
     lock.releaseLock();
   }
+}
+
+// ======================= ประวัติ (Log) =======================
+// ทุกการเปลี่ยนแปลงเพิ่ม 1 แถวในชีต Log (เพิ่มอย่างเดียว ไม่แก้ย้อนหลัง) → ใช้ทำ timeline ของแต่ละรายการ
+const LOG_SHEET = 'Log';
+const LOG_HEADERS = ['log_id', 'at', 'scan_id', 'event', 'part_code', 'qr_raw', 'location_from', 'location_to',
+                     'qty_from', 'qty_to', 'unit', 'by', 'note', 'ref'];
+const LOG_TEXT_COLS = ['log_id', 'scan_id', 'event', 'part_code', 'qr_raw', 'location_from', 'location_to', 'unit', 'by', 'ref'];
+
+function logSheet_() {
+  const ss = book_();
+  let sh = ss.getSheetByName(LOG_SHEET);
+  if (!sh) sh = ss.insertSheet(LOG_SHEET);
+  if (sh.getLastRow() === 0) {
+    sh.getRange(1, 1, 1, LOG_HEADERS.length).setValues([LOG_HEADERS]);
+    sh.setFrozenRows(1);
+    LOG_TEXT_COLS.forEach(function (col) {
+      sh.getRange(1, LOG_HEADERS.indexOf(col) + 1, sh.getMaxRows(), 1).setNumberFormat('@');
+    });
+  }
+  return sh;
+}
+
+// เรียกภายใน lock ของคำสั่งที่เปลี่ยนข้อมูลเท่านั้น — ถ้าเขียน log ไม่ได้ ไม่ให้การบันทึกหลักล้มตาม
+function logEvents_(events) {
+  if (!events || !events.length) return;
+  try {
+    const sh = logSheet_();
+    const rows = events.map(function (e) {
+      return LOG_HEADERS.map(function (h) {
+        if (h === 'log_id') return Utilities.getUuid();
+        if (h === 'at') return e.at || new Date();
+        const v = e[h];
+        return v === undefined || v === null ? '' : v;
+      });
+    });
+    sh.getRange(sh.getLastRow() + 1, 1, rows.length, LOG_HEADERS.length).setValues(rows);
+  } catch (err) {
+    console.error('logEvents_ failed: ' + err);
+  }
+}
+
+function readLog_() {
+  const sh = book_().getSheetByName(LOG_SHEET);
+  if (!sh || sh.getLastRow() < 2) return [];
+  return sh.getRange(2, 1, sh.getLastRow() - 1, LOG_HEADERS.length).getValues().map(function (r) {
+    const o = {};
+    LOG_HEADERS.forEach(function (h, j) { o[h] = r[j]; });
+    return o;
+  });
+}
+
+function logToClient_(e, legacy) {
+  const num = function (v) { return v === '' || v == null ? '' : Number(v); };
+  return {
+    at: fmt_(e.at), event: String(e.event), location_from: String(e.location_from || ''), location_to: String(e.location_to || ''),
+    qty_from: num(e.qty_from), qty_to: num(e.qty_to), unit: String(e.unit || ''), by: String(e.by || ''),
+    note: String(e.note || ''), ref: String(e.ref || ''), legacy: !!legacy
+  };
+}
+
+/**
+ * timeline ของ 1 รายการ: { record, events[], legacy }
+ * รายการที่บันทึกก่อนเริ่มเก็บ Log → สร้างเหตุการณ์ย้อนหลังจากข้อมูลที่มี (ค่าแรก + แก้ครั้งล่าสุด + ลบ + รูป)
+ */
+function getTimeline(scanId) {
+  const id = clean_(scanId, 64);
+  const row = readAll_(sheet_()).filter(function (r) { return String(r.scan_id) === id; })[0];
+  if (!row) throw new Error('ไม่พบรายการนี้ในระบบ');
+  const rec = toClient_(row);
+  const logs = readLog_().filter(function (e) { return String(e.scan_id) === id; });
+  const has = function (ev) { return logs.some(function (e) { return String(e.event) === ev; }); };
+  const events = logs.map(function (e) { return logToClient_(e, false); });
+  const legacy = !has('create');
+
+  if (legacy) {
+    const firstLoc = rec.location_original || rec.location;
+    const firstQty = rec.qty_original !== '' ? rec.qty_original : rec.qty;
+    events.push(logToClient_({ at: row.scanned_at, event: 'create', location_to: firstLoc, qty_to: firstQty, unit: rec.unit,
+                               by: rec.scanned_by, note: rec.device ? 'เครื่อง ' + rec.device : '' }, true));
+    if (!has('qty') && rec.qty_original !== '' && rec.qty_original !== rec.qty) {
+      events.push(logToClient_({ at: row.edited_at, event: 'qty', location_to: rec.location, qty_from: rec.qty_original, qty_to: rec.qty,
+                                 unit: rec.unit, by: rec.edited_by, note: rec.edit_note }, true));
+    }
+    if (!has('move') && rec.location_original && rec.location_original !== rec.location) {
+      events.push(logToClient_({ at: row.edited_at, event: 'move', location_from: rec.location_original, location_to: rec.location,
+                                 qty_to: rec.qty, unit: rec.unit, by: rec.edited_by, note: rec.edit_note }, true));
+    }
+    if (!has('delete') && rec.status === 'deleted') {
+      events.push(logToClient_({ at: row.deleted_at, event: 'delete', location_from: rec.location, qty_from: rec.qty, unit: rec.unit,
+                                 by: rec.deleted_by, note: rec.delete_reason }, true));
+    }
+    const ps = book_().getSheetByName(PHOTO_SHEET);
+    if (ps) {
+      const logged = {};
+      logs.forEach(function (e) { if (e.ref) logged[String(e.ref)] = 1; });
+      readPhotos_(ps).forEach(function (p) {
+        if (String(p.scan_id) !== id || logged[String(p.photo_id)]) return;
+        events.push(logToClient_({ at: p.uploaded_at, event: 'photo_add', location_to: String(p.location), by: String(p.uploaded_by), ref: String(p.photo_id) }, true));
+        if (String(p.status) === 'deleted') {
+          events.push(logToClient_({ at: p.deleted_at, event: 'photo_delete', by: String(p.deleted_by), ref: String(p.photo_id) }, true));
+        }
+      });
+    }
+  }
+  events.sort(function (a, b) { return a.at < b.at ? -1 : a.at > b.at ? 1 : 0; });
+  return { record: rec, events: events, legacy: legacy };
+}
+
+/** ทุกกล่อง/แพ็กเกจที่ยังใช้งานของรหัสสินค้านี้ + ยอดรวมแยกตามหน่วย */
+function getPartPackages(partCode) {
+  const part = clean_(partCode, 80).toUpperCase();
+  if (!part) throw new Error('ไม่พบรหัสสินค้า');
+  const rows = readAll_(sheet_()).map(toClient_).filter(function (r) {
+    return r.status !== 'deleted' && r.part_code.toUpperCase() === part;
+  });
+  rows.sort(function (a, b) { return a.location < b.location ? -1 : a.location > b.location ? 1 : 0; });
+  const totals = {}, locs = {};
+  rows.forEach(function (r) {
+    if (typeof r.qty === 'number') totals[r.unit || '-'] = (totals[r.unit || '-'] || 0) + r.qty;
+    locs[r.location] = 1;
+  });
+  return { part_code: part, rows: rows, totals: totals, locationCount: Object.keys(locs).length };
 }
