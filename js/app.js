@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261114-1649'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261114-1701'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -86,6 +86,7 @@ function render() {
     '</header>' +
     '<nav class="tabs">' +
       '<button data-view="scan" class="' + (S.view === 'scan' ? 'active' : '') + '">สแกน' + (pending ? ' <b class="badge">' + pending + '</b>' : '') + '</button>' +
+      '<button data-view="manual" class="' + (S.view === 'manual' ? 'active' : '') + '">กรอกเอง</button>' +
       '<button data-view="history" class="' + (S.view === 'history' ? 'active' : '') + '">ประวัติ / ลบ</button>' +
     '</nav>' +
     '<main id="main"></main>';
@@ -94,7 +95,7 @@ function render() {
   Array.prototype.forEach.call(document.querySelectorAll('.tabs button'), function (b) {
     b.onclick = function () { S.view = b.getAttribute('data-view'); render(); };
   });
-  if (S.view === 'scan') renderScan(); else renderHistory();
+  if (S.view === 'scan') renderScan(); else if (S.view === 'manual') renderManual(); else renderHistory();
 }
 
 function refreshHeader() {
@@ -113,6 +114,7 @@ function renderScan() {
       '<input id="scanInput" class="scan-input" inputmode="none" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="กดปุ่มสแกนที่ตัวเครื่อง">' +
       '<button id="btnType" class="btn ghost" title="พิมพ์รหัสเอง">⌨</button>' +
     '</section>' +
+    '<button id="btnCam" class="btn cam-btn">📸 สแกนด้วยกล้อง (โทรศัพท์)</button>' +
     '<div id="draft"></div>' +
     '<div id="msg"></div>' +
     '<div id="sync"></div>' +
@@ -133,6 +135,7 @@ function renderScan() {
     if (inp.getAttribute('inputmode') === 'text') return; // พิมพ์เอง → รอ Enter
     scanIdleTimer = setTimeout(commitScanInput, SCAN_IDLE_MS);
   });
+  $('btnCam').onclick = function () { openCameraScanner(handleScan); };
   $('btnType').onclick = function () {
     inp.setAttribute('inputmode', 'text');
     inp.blur(); setTimeout(function () { inp.focus(); }, 30);
@@ -246,7 +249,7 @@ function renderRecent() {
   });
 }
 
-function refreshScanParts() { if (S.view === 'scan') { renderSync(); renderRecent(); } else refreshHeader(); }
+function refreshScanParts() { if (S.view === 'scan' || S.view === 'manual') { renderSync(); renderRecent(); } else refreshHeader(); }
 
 // ---------- รับค่าสแกน ----------
 // สแกนสินค้า → ขึ้นเป็น "รอบันทึก" (draft) ยังไม่บันทึก
@@ -347,7 +350,7 @@ function saveDraft() {
 
 function setLocation(loc) {
   S.location = loc; store('pda_loc', loc);
-  renderLoc(); renderDraft();
+  renderLoc(); renderDraft(); renderManualLoc();
 }
 
 // ---------- ส่งขึ้นเซิร์ฟเวอร์ ----------
@@ -777,6 +780,189 @@ function openLocationPicker() {
   draw();
 }
 
+// ======================= สแกนด้วยกล้อง (โทรศัพท์) =======================
+// ใช้ BarcodeDetector ของเบราว์เซอร์ถ้ามี (Android Chrome) ไม่งั้นโหลด jsQR (iPhone / เบราว์เซอร์อื่น)
+var JSQR_URL = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js';
+
+function getDetector() {
+  if (getDetector.p) return getDetector.p;
+  var native = ('BarcodeDetector' in window && BarcodeDetector.getSupportedFormats)
+    ? BarcodeDetector.getSupportedFormats().then(function (f) {
+        if (f.indexOf('qr_code') < 0) throw new Error('no qr');
+        var want = ['qr_code', 'code_128', 'code_39', 'ean_13', 'data_matrix'].filter(function (x) { return f.indexOf(x) >= 0; });
+        var d = new BarcodeDetector({ formats: want });
+        return function (src) { return d.detect(src).then(function (r) { return r.length ? r[0].rawValue : null; }); };
+      })
+    : Promise.reject(new Error('no native'));
+  getDetector.p = native.catch(function () {
+    return loadScriptOnce(JSQR_URL).then(function () {
+      var c = document.createElement('canvas'), g = c.getContext('2d', { willReadFrequently: true });
+      return function (src) {
+        var w = src.videoWidth || src.width, h = src.videoHeight || src.height;
+        if (!w || !h) return Promise.resolve(null);
+        var k = Math.min(1, 800 / Math.max(w, h));
+        c.width = Math.round(w * k); c.height = Math.round(h * k);
+        g.drawImage(src, 0, 0, c.width, c.height);
+        var img = g.getImageData(0, 0, c.width, c.height);
+        var r = window.jsQR(img.data, c.width, c.height, { inversionAttempts: 'attemptBoth' });
+        return Promise.resolve(r && r.data ? r.data : null);
+      };
+    });
+  });
+  getDetector.p.catch(function () { getDetector.p = null; });
+  return getDetector.p;
+}
+
+function openCameraScanner(onResult) {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    toast('เบราว์เซอร์นี้เปิดกล้องไม่ได้ (ต้องเปิดผ่าน https)', 3500); return;
+  }
+  openModal('<h3>สแกนด้วยกล้อง</h3>' +
+    '<div class="cam-wrap"><video id="camV" playsinline muted autoplay></video><div class="cam-frame"></div></div>' +
+    '<p class="muted small center" id="camHint">กำลังเปิดกล้อง…</p>' +
+    '<div class="actions"><button class="btn" id="camClose">ปิด</button></div>', true);
+  var video = $('camV'), stream = null, done = false;
+  function stop() { done = true; if (stream) stream.getTracks().forEach(function (t) { t.stop(); }); }
+  $('camClose').onclick = function () { stop(); closeModal(); };
+  var cam = navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+  Promise.all([cam, getDetector()]).then(function (res) {
+    stream = res[0];
+    var detect = res[1];
+    if (done) { stop(); return; }
+    video.srcObject = stream;
+    return video.play().then(function () {
+      if ($('camHint')) $('camHint').textContent = 'เล็ง QR ให้อยู่ในกรอบ';
+      (function tick() {
+        if (done) return;
+        detect(video).then(function (text) {
+          if (done) return;
+          if (text) { stop(); closeModal(); onResult(text); return; }
+          setTimeout(tick, 120);
+        }, function () { setTimeout(tick, 250); });
+      })();
+    });
+  }).catch(function (err) {
+    cam.then(function (s) { s.getTracks().forEach(function (t) { t.stop(); }); }, function () {});
+    stop();
+    var name = err && err.name;
+    var msg = name === 'NotAllowedError' ? 'ไม่ได้รับอนุญาตให้ใช้กล้อง — กดอนุญาตกล้องที่แถบที่อยู่ของเบราว์เซอร์แล้วลองใหม่'
+      : name === 'NotFoundError' ? 'ไม่พบกล้องในเครื่องนี้'
+      : 'เปิดกล้องไม่ได้: ' + ((err && (err.message || err.name)) || err);
+    if ($('camHint')) $('camHint').textContent = msg; else toast(msg, 4000);
+  });
+}
+
+// ======================= หน้ากรอกเอง =======================
+var manualSrc = null; // QR ที่ใช้เติมฟอร์ม (ถ้ารหัส/Lot/Pkg ไม่ถูกแก้ จะใช้ QR เดิมเพื่อกันบันทึกซ้ำ)
+var UNITS = ['EA', 'kg', 'm', 'roll', 'box', 'set'];
+
+function renderManual() {
+  $('main').innerHTML =
+    '<section class="card-form">' +
+      '<div class="sec-title"><span>กรอกข้อมูลเอง</span><button class="btn small" id="mfCam">📸 สแกนเติมข้อมูล</button></div>' +
+      '<label>Location *</label><button class="btn loc-pick" id="mfLoc"></button>' +
+      '<label>รหัสสินค้า *</label>' +
+      '<input id="mfPart" class="field" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="เช่น 1005QT00179 (สแกนป้ายใส่ช่องนี้ได้)">' +
+      '<div class="grid2">' +
+        '<div><label>Lot</label><input id="mfLot" class="field" autocomplete="off" spellcheck="false"></div>' +
+        '<div><label>Package</label><input id="mfPkg" class="field" autocomplete="off" spellcheck="false"></div>' +
+      '</div>' +
+      '<div class="grid2">' +
+        '<div><label>จำนวน *</label><input id="mfQty" class="field big-num" inputmode="decimal" autocomplete="off"></div>' +
+        '<div><label>หน่วย</label><select id="mfUnit" class="field">' + UNITS.map(function (u) { return '<option>' + u + '</option>'; }).join('') + '</select></div>' +
+      '</div>' +
+      '<div class="actions"><button class="btn" id="mfClear">ล้าง</button><button class="btn primary save-btn" id="mfSave">💾 บันทึก</button></div>' +
+    '</section>' +
+    '<div id="msg"></div>' +
+    '<div id="sync"></div>' +
+    '<section><div class="sec-title"><span>รายการล่าสุด (เครื่องนี้)</span><span id="count" class="muted"></span></div>' +
+    '<div id="recent"></div></section>';
+  S.msg = null;
+  renderManualLoc();
+  $('mfLoc').onclick = openLocationPicker;
+  $('mfCam').onclick = function () { openCameraScanner(fillManualFromScan); };
+  var part = $('mfPart');
+  part.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    if (looksLikeScan(part.value)) fillManualFromScan(part.value); else $('mfQty').focus();
+  });
+  part.addEventListener('change', function () { if (looksLikeScan(part.value)) fillManualFromScan(part.value); });
+  $('mfQty').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); saveManual(); } });
+  $('mfClear').onclick = function () { clearManual(); part.focus(); };
+  $('mfSave').onclick = saveManual;
+  renderMsg(); renderSync(); renderRecent();
+}
+
+function looksLikeScan(v) { v = String(v || ''); return v.indexOf('*') >= 0 || v.charAt(0) === '{' || /:\s*\S+\|/.test(v) || !!asLocation(v); }
+
+function renderManualLoc() {
+  var el = $('mfLoc'); if (!el) return;
+  el.innerHTML = S.location ? '📍 <b>' + esc(S.location) + '</b> <span class="muted small">แตะเพื่อเปลี่ยน</span>' : '📍 เลือก Location';
+  el.classList.toggle('warn', !S.location);
+}
+
+function setUnit(u) {
+  var sel = $('mfUnit'); if (!sel || !u) return;
+  if (!Array.prototype.some.call(sel.options, function (o) { return o.value === u; })) sel.appendChild(new Option(u, u));
+  sel.value = u;
+}
+
+function fillManualFromScan(raw) {
+  var chk = checkScan(raw);
+  if (!chk.text) return;
+  if (chk.error) { beep(false); setMsg('err', '❌ ' + esc(chk.error)); return; }
+  var loc = asLocation(chk.text);
+  if (loc) {
+    setLocation(loc); beep(true);
+    if (asLocation($('mfPart').value)) $('mfPart').value = '';
+    setMsg('ok', '📍 Location: <b>' + esc(loc) + '</b>');
+    return;
+  }
+  var p = parseQr(chk.text);
+  $('mfPart').value = p.part_code; $('mfLot').value = p.lot_no; $('mfPkg').value = p.pkg_ref;
+  $('mfQty').value = p.qty === '' ? '' : String(p.qty);
+  setUnit(p.unit);
+  manualSrc = { qr_raw: p.qr_raw, part_code: p.part_code, lot_no: p.lot_no, pkg_ref: p.pkg_ref };
+  beep(true);
+  setMsg('warn', 'เติมข้อมูลจาก QR แล้ว — ตรวจสอบ/แก้ไข แล้วกด <b>บันทึก</b>');
+  var q = $('mfQty'); q.focus(); q.select();
+}
+
+function clearManual() {
+  ['mfPart', 'mfLot', 'mfPkg', 'mfQty'].forEach(function (id) { if ($(id)) $(id).value = ''; });
+  manualSrc = null;
+}
+
+function manualDirty() { return ['mfPart', 'mfLot', 'mfPkg', 'mfQty'].some(function (id) { return $(id) && $(id).value.trim(); }); }
+
+function saveManual() {
+  if (!S.user) { openUserModal(); return; }
+  if (!S.location) { beep(false); toast('กรุณาเลือก Location'); openLocationPicker(); return; }
+  var part = $('mfPart').value.trim().toUpperCase(), lot = $('mfLot').value.trim(), pkg = $('mfPkg').value.trim();
+  var qty = parseQtyInput($('mfQty').value), unit = $('mfUnit').value;
+  if (!part) { beep(false); toast('กรุณากรอกรหัสสินค้า'); $('mfPart').focus(); return; }
+  if (qty === null) { beep(false); toast('กรุณากรอกจำนวนเป็นตัวเลข'); $('mfQty').focus(); return; }
+  var id = uid();
+  var fromQr = manualSrc && manualSrc.part_code.toUpperCase() === part && manualSrc.lot_no === lot && manualSrc.pkg_ref === pkg;
+  var qr = fromQr ? manualSrc.qr_raw : ['MANUAL', part, lot, qty, pkg, id.slice(0, 8)].join('|');
+  var dup = findSavedDuplicate(qr);
+  if (dup) { beep(false); setMsg('err', '⚠ QR นี้บันทึกแล้วที่ <b>' + esc(dup.location) + '</b>'); return; }
+  var item = {
+    scan_id: id, scanned_at: new Date().toISOString(), location: S.location,
+    qr_raw: qr, part_code: part, lot_no: lot, qty: qty, unit: unit, pkg_ref: pkg,
+    scanned_by: S.user, device: S.device, status: 'pending'
+  };
+  S.recent.unshift(item);
+  saveRecent();
+  clearManual();
+  beep(true);
+  setMsg('ok', '✔ บันทึก <b>' + esc(part) + '</b> × ' + esc(fmtQty(qty, unit)) + ' → <b>' + esc(item.location) + '</b>', item.scan_id);
+  refreshScanParts();
+  flush();
+  $('mfPart').focus();
+}
+
 // ======================= รูปถ่าย =======================
 // ถ่ายด้วยกล้องเครื่อง (capture=environment) หรือเลือกจากแกลเลอรี → ย่อเป็น JPEG ≤1280px → เก็บใน IndexedDB → อัปโหลดทีละรูป
 var PhotoStore = (function () {
@@ -886,7 +1072,7 @@ function addPhoto(scanId, file, row) {
 }
 
 function afterPhotoChange(scanId, row) {
-  if (S.view === 'scan') { renderSync(); renderRecent(); } else { renderHistoryList(); refreshHeader(); }
+  if (S.view === 'scan' || S.view === 'manual') { renderSync(); renderRecent(); } else { renderHistoryList(); refreshHeader(); }
   if (openPhotos.current && openPhotos.current.scanId === scanId) openPhotos(scanId, row || openPhotos.current.row);
 }
 
@@ -1031,7 +1217,7 @@ function checkUpdate() {
 function tryReload() {
   if (!updateReady) return;
   var inp = $('scanInput');
-  var busy = S.draft || S.syncing || S.photoSyncing || !$('modal').classList.contains('hidden') || (inp && inp.value);
+  var busy = S.draft || manualDirty() || S.syncing || S.photoSyncing || !$('modal').classList.contains('hidden') || (inp && inp.value);
   if (busy) { setTimeout(tryReload, 5000); return; }
   location.replace(location.pathname + '?v=' + encodeURIComponent(updateReady));
 }
