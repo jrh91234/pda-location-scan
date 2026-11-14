@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261115-0003'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261115-0009'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -1125,6 +1125,7 @@ function getDetector() {
 }
 
 var camCanvas = null;
+var camCropSide = 0; // ด้านของกรอบเล็งในหน่วยพิกเซลของภาพกล้อง (คำนวณจากกรอบที่เห็นบนจอ)
 // ตัดกรอบกลางภาพแบบเต็มความละเอียด (full = ทั้งภาพ ย่อไม่เกิน 1280 — ใช้สลับเป็นระยะเผื่อ QR อยู่นอกกรอบ)
 function grabFrame(src, full) {
   var w = src.videoWidth || src.width, h = src.videoHeight || src.height;
@@ -1132,7 +1133,7 @@ function grabFrame(src, full) {
   var sx = 0, sy = 0, sw = w, sh = h, ow, oh;
   if (full) { var k = Math.min(1, 1280 / Math.max(w, h)); ow = Math.round(w * k); oh = Math.round(h * k); }
   else {
-    var side = Math.round(Math.min(w, h) * CROP_RATIO);
+    var side = camCropSide || Math.round(Math.min(w, h) * CROP_RATIO);
     sx = Math.round((w - side) / 2); sy = Math.round((h - side) / 2); sw = sh = side;
     ow = oh = Math.min(side, 1000);
   }
@@ -1198,12 +1199,21 @@ function openCameraScanner(onResult) {
     if ($('camHint')) $('camHint').textContent = msg; else toast(msg, 4000);
   });
 
-  // กรอบเล็งให้ตรงกับพื้นที่ที่ตัดไปอ่าน
+  // กรอบเล็งกลางกล่องกล้อง + แปลงขนาดกรอบเป็นพิกเซลของภาพกล้อง (video ใช้ object-fit: cover → ภาพถูกขยายเท่ากันรอบจุดกลาง)
   function sizeFrame() {
     var f = $('camFrame'), wrap = video.parentNode; if (!f || !wrap) return;
-    var side = Math.round(Math.min(wrap.clientWidth, wrap.clientHeight) * CROP_RATIO);
+    var W = wrap.clientWidth, H = wrap.clientHeight, vw = video.videoWidth, vh = video.videoHeight;
+    var side = Math.round(Math.min(W, H) * CROP_RATIO);
     f.style.width = f.style.height = side + 'px';
+    if (vw && vh && W && H) {
+      var scale = Math.max(W / vw, H / vh);
+      camCropSide = Math.min(Math.round(side / scale), vw, vh);
+    }
   }
+  camCropSide = 0;
+  video.addEventListener('loadedmetadata', sizeFrame);
+  video.addEventListener('resize', sizeFrame);
+  window.addEventListener('resize', function onR() { if (done) { window.removeEventListener('resize', onR); return; } sizeFrame(); });
 }
 
 // ซูม / โฟกัสต่อเนื่อง / ไฟฉาย — แสดงเฉพาะที่เครื่องและเบราว์เซอร์รองรับ
