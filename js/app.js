@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261114-2335'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261114-2340'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -777,17 +777,84 @@ function renderHistory() {
       '<input id="fQ" class="field" placeholder="ค้นหา รหัสสินค้า / Lot / QR" value="' + esc(f.q) + '">' +
       '<label class="radio"><input type="checkbox" id="fDel"' + (f.includeDeleted ? ' checked' : '') + '> แสดงรายการที่ลบแล้ว</label>' +
       '<button class="btn primary" id="fGo">ค้นหา</button>' +
+      '<button class="btn export-btn" id="fXlsx">⬇️ Export Excel (ตามตัวกรอง)</button>' +
     '</section>' +
     '<div id="histOut"></div>';
   $('fGo').onclick = function () {
-    S.hist.filter = { date: $('fDate').value, location: $('fLoc').value.trim().toUpperCase(), user: $('fUser').value.trim(),
-      q: $('fQ').value.trim(), includeDeleted: $('fDel').checked };
+    S.hist.filter = readHistFilter();
     loadHistory();
   };
+  $('fXlsx').onclick = exportExcel;
   ['fLoc', 'fUser', 'fQ'].forEach(function (id) {
     $(id).addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); $('fGo').click(); } });
   });
   if (S.hist.data) renderHistoryList(); else loadHistory();
+}
+
+function readHistFilter() {
+  return { date: $('fDate').value, location: $('fLoc').value.trim().toUpperCase(), user: $('fUser').value.trim(),
+    q: $('fQ').value.trim(), includeDeleted: $('fDel').checked };
+}
+
+// ---------- Export Excel ----------
+// ดึงทุกรายการตามตัวกรอง (ไม่จำกัด 300 แถวเหมือนหน้าจอ) แล้วสร้างไฟล์ .xlsx ในเบราว์เซอร์ด้วย SheetJS
+var XLSX_URL = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+var XLSX_COLS = [
+  ['scanned_at', 'วันเวลาสแกน', 19], ['location', 'Location', 12], ['part_code', 'รหัสสินค้า', 16], ['lot_no', 'Lot', 13],
+  ['qty', 'จำนวน', 9], ['unit', 'หน่วย', 7], ['pkg_ref', 'Package', 10], ['scanned_by', 'ผู้สแกน', 14], ['device', 'เครื่อง', 10],
+  ['status', 'สถานะ', 9], ['photos', 'จำนวนรูป', 8], ['location_original', 'Location เดิม', 12], ['qty_original', 'ยอดเดิม', 9],
+  ['edited_by', 'แก้ไขล่าสุดโดย', 14], ['edited_at', 'แก้ไขล่าสุดเมื่อ', 19], ['edit_note', 'เหตุผลแก้ไข', 20],
+  ['deleted_by', 'ลบโดย', 12], ['deleted_at', 'ลบเมื่อ', 19], ['delete_reason', 'เหตุผลลบ', 16], ['qr_raw', 'QR', 40], ['scan_id', 'scan_id', 38]
+];
+
+function exportExcel() {
+  var f = readHistFilter();
+  var btn = $('fXlsx'); btn.disabled = true; btn.textContent = 'กำลังเตรียมไฟล์…';
+  function done() { btn.disabled = false; btn.textContent = '⬇️ Export Excel (ตามตัวกรอง)'; }
+  Promise.all([loadScriptOnce(XLSX_URL), api('listScans', Object.assign({}, f, { limit: 20000, export: true }))]).then(function (res) {
+    var d = res[1];
+    if (!d.rows.length) { done(); toast('ไม่มีข้อมูลตามตัวกรอง'); return; }
+    var rows = d.rows.slice().reverse().map(function (r) { // เก่า → ใหม่
+      var o = {};
+      XLSX_COLS.forEach(function (c) {
+        var k = c[0], v = r[k];
+        if (k === 'status') v = r.status === 'deleted' ? 'ลบแล้ว' : 'ใช้งาน';
+        if (k === 'photos') v = (r.photos || []).length;
+        if (k === 'location_original' && v === r.location) v = '';
+        o[c[1]] = v === undefined || v === null ? '' : v;
+      });
+      return o;
+    });
+    var wb = XLSX.utils.book_new();
+    var ws = XLSX.utils.json_to_sheet(rows, { header: XLSX_COLS.map(function (c) { return c[1]; }) });
+    ws['!cols'] = XLSX_COLS.map(function (c) { return { wch: c[2] }; });
+    ws['!autofilter'] = { ref: ws['!ref'] };
+    XLSX.utils.book_append_sheet(wb, ws, 'รายการ');
+
+    // สรุปตามพาร์ท (เฉพาะรายการที่ใช้งาน)
+    var sum = {};
+    d.rows.forEach(function (r) {
+      if (r.status === 'deleted') return;
+      var key = r.part_code + '|' + r.unit;
+      var s = sum[key] || (sum[key] = { part: r.part_code, unit: r.unit, n: 0, qty: 0, locs: {} });
+      s.n++; if (typeof r.qty === 'number') s.qty += r.qty; s.locs[r.location] = 1;
+    });
+    var srows = Object.keys(sum).sort().map(function (k) {
+      var s = sum[k];
+      return { 'รหัสสินค้า': s.part, 'จำนวนกล่อง': s.n, 'ยอดรวม': Math.round(s.qty * 1000) / 1000, 'หน่วย': s.unit,
+               'จำนวน Location': Object.keys(s.locs).length, 'Location': Object.keys(s.locs).sort().join(', ') };
+    });
+    var ws2 = XLSX.utils.json_to_sheet(srows.length ? srows : [{ 'รหัสสินค้า': '(ไม่มีรายการที่ใช้งาน)' }]);
+    ws2['!cols'] = [{ wch: 16 }, { wch: 11 }, { wch: 10 }, { wch: 7 }, { wch: 14 }, { wch: 60 }];
+    XLSX.utils.book_append_sheet(wb, ws2, 'สรุปตามพาร์ท');
+
+    var now = new Date();
+    var name = 'PDA-Scan_' + (f.date ? f.date.replace(/-/g, '') : 'ทั้งหมด') + (f.location ? '_' + f.location : '') +
+      '_' + now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate()) + '-' + pad(now.getHours()) + pad(now.getMinutes()) + '.xlsx';
+    XLSX.writeFile(wb, name);
+    done();
+    toast('ดาวน์โหลด ' + d.rows.length + ' รายการ' + (d.rows.length < d.total ? ' (ตัดที่ 20,000 แถว)' : ''), 3000);
+  }, function (err) { done(); toast(err.message === 'load failed' ? 'โหลดตัวสร้าง Excel ไม่ได้ (ต้องต่ออินเทอร์เน็ต)' : err.message, 3500); });
 }
 
 function loadHistory() {

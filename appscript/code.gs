@@ -216,7 +216,7 @@ function saveScans(items) {
  */
 function listScans(filter) {
   filter = filter || {};
-  const limit = Math.min(Number(filter.limit) || 300, 2000);
+  const limit = Math.min(Number(filter.limit) || 300, filter.export ? 20000 : 2000); // export = ดึงได้มากกว่าหน้าจอ
   const loc = clean_(filter.location, 40).toUpperCase();
   const user = clean_(filter.user, 60).toLowerCase();
   const q = clean_(filter.q, 80).toLowerCase();

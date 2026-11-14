@@ -190,3 +190,5 @@ button.loc-pill { border: 1px solid var(--blue); font-family: inherit; font-size
 .pkg-row { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px; font-family: inherit; font-size: 15px; }
 .pkg-mid { flex: 1; min-width: 0; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
 .small-num { font-size: 16px !important; }
+
+.export-btn { grid-column: 1 / -1; }
