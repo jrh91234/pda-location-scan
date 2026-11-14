@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261115-0009'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261115-0012'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -1096,32 +1096,47 @@ var IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform
 
 function firstValue(r) { return r && r.length ? r[0].rawValue : null; }
 
-function getDetector() {
-  if (getDetector.p) return getDetector.p;
-  var native = (window.BarcodeDetector && window.BarcodeDetector.getSupportedFormats)
-    ? window.BarcodeDetector.getSupportedFormats().then(function (f) {
-        if (f.indexOf('qr_code') < 0) throw new Error('no qr');
-        var d = new window.BarcodeDetector({ formats: SCAN_FORMATS.filter(function (x) { return f.indexOf(x) >= 0; }) });
-        return { name: 'native', label: IS_IOS ? 'ตัวอ่านของ Apple (Shape Detection)' : 'ตัวอ่านในเบราว์เซอร์', crop: false,
-                 detect: function (src) { return d.detect(src).then(firstValue); } };
-      })
-    : Promise.reject(new Error('no native'));
-  getDetector.p = native.catch(function () {
-    return import(ZXING_URL).then(function (m) {
-      var d = new m.BarcodeDetector({ formats: SCAN_FORMATS });
-      return { name: 'zxing', label: 'zxing', crop: true, detect: function (src) { return d.detect(src).then(firstValue); } };
-    });
-  }).catch(function () {
-    return loadScriptOnce(JSQR_URL).then(function () {
-      return { name: 'jsqr', label: 'jsQR (สำรอง)', crop: true, detect: function (src) {
-        var g = src.getContext('2d', { willReadFrequently: true });
-        var r = window.jsQR(g.getImageData(0, 0, src.width, src.height).data, src.width, src.height, { inversionAttempts: 'attemptBoth' });
-        return Promise.resolve(r && r.data ? r.data : null);
-      } };
+// ตัวอ่านแต่ละตัว: { name, label, src: 'video' | 'full' | 'crop', detect(src) → Promise<text|null> }
+function makeNativeEngine() {
+  if (!(window.BarcodeDetector && window.BarcodeDetector.getSupportedFormats)) return Promise.reject(new Error('no native'));
+  return window.BarcodeDetector.getSupportedFormats().then(function (f) {
+    if (f.indexOf('qr_code') < 0) throw new Error('no qr');
+    var d = new window.BarcodeDetector({ formats: SCAN_FORMATS.filter(function (x) { return f.indexOf(x) >= 0; }) });
+    // iPhone (ฟีเจอร์ทดลอง): ส่งเป็นภาพนิ่ง (canvas) เผื่ออ่านจาก video ไม่ได้
+    return { name: 'native', label: IS_IOS ? 'Apple' : 'เบราว์เซอร์', src: IS_IOS ? 'full' : 'video',
+             detect: function (src) { return d.detect(src).then(firstValue); } };
+  });
+}
+function makeZxingEngine() {
+  return import(ZXING_URL).then(function (m) {
+    var d = new m.BarcodeDetector({ formats: SCAN_FORMATS });
+    return { name: 'zxing', label: 'zxing', src: 'crop', detect: function (src) { return d.detect(src).then(firstValue); } };
+  });
+}
+function makeJsqrEngine() {
+  return loadScriptOnce(JSQR_URL).then(function () {
+    return { name: 'jsqr', label: 'jsQR', src: 'crop', detect: function (src) {
+      var g = src.getContext('2d', { willReadFrequently: true });
+      var r = window.jsQR(g.getImageData(0, 0, src.width, src.height).data, src.width, src.height, { inversionAttempts: 'attemptBoth' });
+      return Promise.resolve(r && r.data ? r.data : null);
+    } };
+  });
+}
+
+// Android ที่มีตัวอ่านในเบราว์เซอร์ → ใช้ตัวนั้นตัวเดียว
+// iPhone / อื่นๆ → zxing (สำรอง jsQR) และถ้ามีตัวอ่าน Apple ให้สลับใช้คู่กันทุกเฟรม (ตัวทดลองอาจอ่านไม่ได้)
+function getDetectors() {
+  if (getDetectors.p) return getDetectors.p;
+  getDetectors.p = makeNativeEngine().catch(function () { return null; }).then(function (nat) {
+    if (nat && !IS_IOS) return [nat];
+    return makeZxingEngine().catch(function () { return makeJsqrEngine(); }).catch(function () { return null; }).then(function (z) {
+      var list = [nat, z].filter(Boolean);
+      if (!list.length) throw new Error('โหลดตัวอ่าน QR ไม่ได้ (ต้องต่ออินเทอร์เน็ต)');
+      return list;
     });
   });
-  getDetector.p.catch(function () { getDetector.p = null; });
-  return getDetector.p;
+  getDetectors.p.catch(function () { getDetectors.p = null; });
+  return getDetectors.p;
 }
 
 var camCanvas = null;
@@ -1160,9 +1175,9 @@ function openCameraScanner(onResult) {
   var cam = navigator.mediaDevices.getUserMedia({
     video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false
   });
-  Promise.all([cam, getDetector()]).then(function (res) {
+  Promise.all([cam, getDetectors()]).then(function (res) {
     stream = res[0];
-    var det = res[1];
+    var engines = res[1].map(function (e) { e.frames = 0; e.hits = 0; e.errors = 0; e.fails = 0; e.lastErr = ''; return e; });
     if (done) { stop(); return; }
     track = stream.getVideoTracks()[0];
     video.srcObject = stream;
@@ -1170,8 +1185,19 @@ function openCameraScanner(onResult) {
       sizeFrame();
       setupCamTools(track);
       if ($('camHint')) $('camHint').innerHTML = 'เล็ง QR ให้อยู่ในกรอบ' + (IS_IOS ? ' · <b>ถือห่างประมาณ 20–30 ซม.</b>' : '');
-      if ($('camInfo')) $('camInfo').textContent = 'ตัวอ่าน: ' + det.label + ' · ' + video.videoWidth + '×' + video.videoHeight;
-      var n = 0;
+      var all = engines.slice(), n = 0, lastInfo = 0;
+      // ข้อมูลวินิจฉัย: ตัวอ่าน · จำนวนเฟรมที่อ่าน · ข้อผิดพลาด
+      function info(force) {
+        var now = Date.now(); if (!force && now - lastInfo < 500) return; lastInfo = now;
+        var el = $('camInfo'); if (!el) return;
+        el.innerHTML = video.videoWidth + '×' + video.videoHeight + ' · ' + all.map(function (e) {
+          var off = engines.indexOf(e) < 0;
+          return '<span class="' + (off ? 'eng-off' : '') + '">' + esc(e.label) + ' ' + e.frames + ' เฟรม' +
+            (e.errors ? ' · ผิดพลาด ' + e.errors + (e.lastErr ? ' (' + esc(String(e.lastErr).slice(0, 60)) + ')' : '') : '') +
+            (off ? ' · ปิดแล้ว' : '') + '</span>';
+        }).join(' | ');
+      }
+      info(true);
       function next() {
         if (done) return;
         if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(function () { tick(); });
@@ -1179,13 +1205,21 @@ function openCameraScanner(onResult) {
       }
       function tick() {
         if (done) return;
-        var src = det.crop ? grabFrame(video, n++ % 4 === 3) : video;
+        var e = engines[n++ % engines.length];
+        var src = e.src === 'video' ? video : grabFrame(video, e.src === 'full' || e.frames % 4 === 3);
         if (!src) { next(); return; }
-        det.detect(src).then(function (text) {
+        e.frames++;
+        e.detect(src).then(function (text) {
+          e.fails = 0;
           if (done) return;
-          if (text) { stop(); closeModal(); onResult(text); return; }
-          next();
-        }, function () { setTimeout(next, 100); });
+          if (text) { e.hits++; stop(); closeModal(); onResult(text); return; }
+          info(); next();
+        }, function (err) {
+          e.errors++; e.fails++; e.lastErr = (err && (err.message || err.name)) || String(err);
+          // ผิดพลาดติดกัน 5 ครั้ง → เลิกใช้ตัวนี้ (ถ้ายังมีตัวอื่นเหลือ)
+          if (e.fails >= 5 && engines.length > 1) engines.splice(engines.indexOf(e), 1);
+          info(true); setTimeout(next, 50);
+        });
       }
       next();
     });
