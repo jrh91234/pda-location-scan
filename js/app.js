@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261114-1641'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261114-1649'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -632,11 +632,12 @@ function renderHistoryList() {
 }
 
 // ======================= Modals =======================
-function openModal(html) {
+// locked = ปิดด้วยการแตะพื้นหลังไม่ได้ (ใช้กับหน้ากรอกชื่อที่บังคับ)
+function openModal(html, locked) {
   var m = $('modal');
   m.innerHTML = '<div class="sheet">' + html + '</div>';
   m.classList.remove('hidden');
-  m.onclick = function (e) { if (e.target === m) closeModal(); };
+  m.onclick = function (e) { if (e.target === m && !locked) closeModal(); };
 }
 function closeModal() {
   var m = $('modal'); m.classList.add('hidden'); m.innerHTML = '';
@@ -650,14 +651,17 @@ function confirmModal(title, body, okText, onOk) {
   $('mOk').onclick = function () { closeModal(); onOk(); };
 }
 
+// ถ้ายังไม่มีชื่อ = บังคับกรอก: ไม่มีปุ่มยกเลิก ปิดไม่ได้จนกว่าจะใส่ชื่อ
 function openUserModal() {
-  openModal('<h3>ชื่อผู้สแกน</h3>' +
-    '<p class="muted small">ใช้บันทึกว่าใครเป็นคนสแกน/ลบ (จำไว้ในเครื่องนี้)</p>' +
-    '<input id="uName" class="field big" placeholder="ชื่อ หรือ รหัสพนักงาน" value="' + esc(S.user) + '">' +
-    '<div class="actions"><button class="btn" id="mCancel">ยกเลิก</button><button class="btn primary" id="mOk">บันทึก</button></div>');
+  var required = !S.user;
+  openModal('<h3>' + (required ? 'กรุณากรอกชื่อก่อนเริ่มใช้งาน' : 'ชื่อผู้สแกน') + '</h3>' +
+    '<p class="muted small">ใช้บันทึกว่าใครเป็นคนสแกน / แก้ยอด / ลบ (จำไว้ในเครื่องนี้)</p>' +
+    '<input id="uName" class="field big" placeholder="ชื่อ หรือ รหัสพนักงาน" autocomplete="off" value="' + esc(S.user) + '">' +
+    '<div class="actions">' + (required ? '' : '<button class="btn" id="mCancel">ยกเลิก</button>') +
+    '<button class="btn primary" id="mOk">' + (required ? 'เริ่มใช้งาน' : 'บันทึก') + '</button></div>', required);
   var inp = $('uName'); setTimeout(function () { inp.focus(); }, 50);
-  inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') $('mOk').click(); });
-  $('mCancel').onclick = closeModal;
+  inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); $('mOk').click(); } });
+  if ($('mCancel')) $('mCancel').onclick = closeModal;
   $('mOk').onclick = function () {
     var v = inp.value.trim();
     if (!v) { toast('กรุณาใส่ชื่อ'); return; }
@@ -665,8 +669,31 @@ function openUserModal() {
   };
 }
 
+function appLink() { return location.origin + location.pathname; }
+
+function loadScriptOnce(src) {
+  loadScriptOnce.cache = loadScriptOnce.cache || {};
+  if (!loadScriptOnce.cache[src]) loadScriptOnce.cache[src] = new Promise(function (res, rej) {
+    var sc = document.createElement('script'); sc.src = src; sc.onload = res;
+    sc.onerror = function () { delete loadScriptOnce.cache[src]; rej(new Error('load failed')); };
+    document.head.appendChild(sc);
+  });
+  return loadScriptOnce.cache[src];
+}
+
+function renderLinkQr(el) {
+  var url = appLink();
+  loadScriptOnce('https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js').then(function () {
+    var qr = window.qrcode(0, 'M'); qr.addData(url); qr.make();
+    el.innerHTML = qr.createSvgTag({ cellSize: 6, margin: 2, scalable: true });
+  }, function () { el.textContent = 'สร้าง QR ไม่ได้ (ต้องต่ออินเทอร์เน็ต) — ใช้ลิงก์ด้านล่างแทน'; });
+}
+
 function openSettings() {
   openModal('<h3>ตั้งค่า</h3>' +
+    '<label>ลิงก์เว็บ — ให้เครื่องอื่นสแกน QR นี้เพื่อเปิดใช้งาน</label>' +
+    '<div id="sQr" class="qr-box muted small">กำลังสร้าง QR…</div>' +
+    '<div class="qr-url"><code>' + esc(appLink()) + '</code><button class="btn small" id="sCopy">คัดลอก</button></div>' +
     '<label>ชื่อเครื่อง (เช่น TN28-01)</label><input id="sDev" class="field" value="' + esc(S.device) + '">' +
     '<label>API URL (Apps Script /exec)</label><input id="sUrl" class="field" placeholder="https://script.google.com/macros/s/.../exec" value="' + esc(store('pda_api_url') || '') + '">' +
     '<p class="muted small">เว้นว่าง = ใช้ค่าใน js/config.js' + (window.PDA_CONFIG.API_URL ? '' : ' (ยังไม่ได้ตั้ง)') + '</p>' +
@@ -685,6 +712,13 @@ function openSettings() {
   $('sClear').onclick = function () {
     S.recent = S.recent.filter(function (r) { return r.status === 'pending'; });
     saveRecent(); refreshScanParts(); $('sOut').textContent = 'ล้างแล้ว (คงรายการรอส่งไว้)';
+  };
+  renderLinkQr($('sQr'));
+  $('sCopy').onclick = function () {
+    var url = appLink();
+    var done = function () { toast('คัดลอกลิงก์แล้ว'); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(url).then(done, function () { prompt('คัดลอกลิงก์', url); });
+    else prompt('คัดลอกลิงก์', url);
   };
   $('mCancel').onclick = closeModal;
   $('mOk').onclick = function () { apply(); closeModal(); toast('บันทึกแล้ว'); flush(); };
