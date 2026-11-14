@@ -13,6 +13,23 @@ function normalizeScan(text) {
   return String(text || '').replace(/[\r\n\t]+/g, '').trim();
 }
 
+// ตรวจค่าที่สแกนก่อนใช้งาน
+//  - อ่านซ้ำ 2 รอบติดกัน (ABCABC) → ตัดเหลือ ABC  (fixed = true)
+//  - ป้าย Warehouse ที่มี * เกิน 4 ส่วน = QR 2 อันติดกัน → error ไม่ให้บันทึก (ไม่เดาว่าตัดตรงไหน)
+function checkScan(raw) {
+  var text = normalizeScan(raw), fixed = false;
+  if (text.length >= 6 && text.length % 2 === 0) {
+    var h = text.length / 2;
+    if (text.slice(0, h) === text.slice(h)) { text = text.slice(0, h); fixed = true; }
+  }
+  var parts = text.split('*');
+  if (parts.length > 4 && toQty(parts[2]) !== '') {
+    return { text: text, fixed: fixed, error: 'QR ผิดรูปแบบ อาจสแกนติดกัน 2 ครั้ง — กรุณาสแกนใหม่' };
+  }
+  if (text.length > 300) return { text: text, fixed: fixed, error: 'ข้อความยาวผิดปกติ — กรุณาสแกนใหม่' };
+  return { text: text, fixed: fixed, error: '' };
+}
+
 function asLocation(text) {
   var t = normalizeScan(text).toUpperCase();
   return LOCATION_SET[t] ? t : null;

@@ -113,3 +113,11 @@ section { margin-bottom: 12px; }
 .photo .pdel { position: absolute; top: 4px; right: 4px; width: 30px; height: 30px; border-radius: 50%; border: 0; background: rgba(198,47,47,.9); color: #fff; font-size: 14px; }
 .photo .ptag { position: absolute; left: 4px; bottom: 4px; background: var(--amber); color: #fff; font-size: 11px; border-radius: 6px; padding: 0 6px; }
 .photo-full { width: 100%; max-height: 75vh; object-fit: contain; border-radius: 10px; background: #000; }
+
+/* ---------- รายการรอบันทึก ---------- */
+.draft-card { background: var(--card); border: 2px solid var(--green); border-radius: 14px; padding: 12px; margin-bottom: 12px; }
+.draft-card.bad { border-color: var(--red); }
+.draft-head { display: flex; justify-content: space-between; align-items: center; font-size: 13px; color: var(--muted); }
+.draft-part { font-size: 22px; font-weight: 700; overflow-wrap: anywhere; margin: 2px 0; }
+.save-btn { width: 100%; margin-top: 10px; font-size: 20px; padding: 14px; }
+.link { background: none; border: 0; color: var(--red); font-weight: 600; padding: 4px 6px; }

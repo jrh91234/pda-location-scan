@@ -10,6 +10,7 @@ var S = {
   device: store('pda_device') || '',
   location: store('pda_loc') || '',
   recent: storeJson('pda_recent') || [],
+  draft: storeJson('pda_draft'),
   syncing: false,
   online: true,
   photoQueue: storeJson('pda_photo_queue') || [], // [{photo_id, scan_id}] รูปที่ยังไม่ได้อัปโหลด (ตัวรูปอยู่ใน IndexedDB)
@@ -111,6 +112,7 @@ function renderScan() {
       '<input id="scanInput" class="scan-input" inputmode="none" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="กดปุ่มสแกนที่ตัวเครื่อง">' +
       '<button id="btnType" class="btn ghost" title="พิมพ์รหัสเอง">⌨</button>' +
     '</section>' +
+    '<div id="draft"></div>' +
     '<div id="msg"></div>' +
     '<div id="sync"></div>' +
     '<section><div class="sec-title"><span>รายการล่าสุด (เครื่องนี้)</span><span id="count" class="muted"></span></div>' +
@@ -120,18 +122,34 @@ function renderScan() {
   inp.addEventListener('keydown', function (e) {
     if (e.key === 'Enter' || e.key === 'Tab' || e.keyCode === 13) {
       e.preventDefault();
-      var v = inp.value; inp.value = '';
-      if (inp.getAttribute('inputmode') === 'text') { inp.setAttribute('inputmode', 'none'); inp.blur(); setTimeout(focusScan, 50); }
-      handleScan(v);
+      commitScanInput();
     }
+  });
+  // ไม่ต้องรอ Enter: DataWedge พิมพ์ทั้ง QR เสร็จในเสี้ยววินาที ถ้าเงียบไป SCAN_IDLE_MS ถือว่าสแกนจบ
+  // การสแกนครั้งถัดไปจึงเริ่มในช่องว่างเสมอ ไม่ไปต่อท้ายครั้งก่อน
+  inp.addEventListener('input', function () {
+    clearTimeout(scanIdleTimer);
+    if (inp.getAttribute('inputmode') === 'text') return; // พิมพ์เอง → รอ Enter
+    scanIdleTimer = setTimeout(commitScanInput, SCAN_IDLE_MS);
   });
   $('btnType').onclick = function () {
     inp.setAttribute('inputmode', 'text');
     inp.blur(); setTimeout(function () { inp.focus(); }, 30);
     toast('พิมพ์รหัสแล้วกด Enter');
   };
-  renderLoc(); renderMsg(); renderSync(); renderRecent();
+  renderLoc(); renderDraft(); renderMsg(); renderSync(); renderRecent();
   focusScan();
+}
+
+var SCAN_IDLE_MS = 350;
+var scanIdleTimer = null;
+
+function commitScanInput() {
+  clearTimeout(scanIdleTimer);
+  var inp = $('scanInput'); if (!inp) return;
+  var v = inp.value; inp.value = '';
+  if (inp.getAttribute('inputmode') === 'text') { inp.setAttribute('inputmode', 'none'); inp.blur(); setTimeout(focusScan, 50); }
+  handleScan(v);
 }
 
 function focusScan() {
@@ -153,7 +171,7 @@ function renderLoc() {
 
 function renderMsg() {
   var el = $('msg'); if (!el) return;
-  if (!S.msg) { el.innerHTML = '<div class="msg idle">พร้อมสแกน — สแกน QR สินค้าเพื่อบันทึกลง Location ด้านบน</div>'; return; }
+  if (!S.msg) { el.innerHTML = '<div class="msg idle">พร้อมสแกน — สแกน QR สินค้า เลือก Location แล้วกด บันทึก</div>'; return; }
   el.innerHTML = '<div class="msg ' + S.msg.type + '">' + S.msg.text +
     (S.msg.camFor ? '<div class="msg-act"><button class="btn small" data-cam="' + esc(S.msg.camFor) + '">📷 ถ่ายรูปรายการนี้</button></div>' : '') + '</div>';
   bindPhotoButtons(el, function () { return null; });
@@ -225,47 +243,104 @@ function renderRecent() {
 function refreshScanParts() { if (S.view === 'scan') { renderSync(); renderRecent(); } else refreshHeader(); }
 
 // ---------- รับค่าสแกน ----------
+// สแกนสินค้า → ขึ้นเป็น "รอบันทึก" (draft) ยังไม่บันทึก
+// สแกนใหม่อีกครั้ง → แทนที่ draft เดิม (ครั้งแรกไม่ถูกบันทึก) / เลือก Location แล้วกดปุ่ม "บันทึก"
 function handleScan(raw) {
-  var text = normalizeScan(raw);
+  var chk = checkScan(raw);
+  var text = chk.text;
   if (!text) return;
 
   var loc = asLocation(text);
   if (loc) {
     setLocation(loc);
     beep(true);
-    setMsg('ok', '📍 เปลี่ยน Location เป็น <b>' + esc(loc) + '</b>');
+    setMsg('ok', '📍 Location: <b>' + esc(loc) + '</b>' + (S.draft ? ' — กด <b>บันทึก</b> เพื่อยืนยัน' : ''));
     return;
   }
   if (S.view !== 'scan') return;
-  if (!S.user) { beep(false); setMsg('err', 'กรุณาใส่ชื่อผู้สแกนก่อน'); openUserModal(); return; }
-  if (!S.location) { beep(false); setMsg('err', '❌ ยังไม่ได้เลือก Location — สแกน QR Location หรือกด "เลือก Location" ก่อน'); return; }
 
-  var dup = S.recent.filter(function (r) { return r.qr_raw === text && (r.status === 'pending' || r.status === 'saved'); })[0];
-  if (dup) {
+  if (chk.error) {
     beep(false);
-    setMsg('err', '⚠ สแกนซ้ำ — QR นี้บันทึกแล้วที่ <b>' + esc(dup.location) + '</b> เวลา ' + hhmm(dup.scanned_at) +
-      (dup.location !== S.location ? '<br>ถ้าต้องการย้าย ให้ลบรายการเดิมก่อนแล้วสแกนใหม่' : ''));
+    setDraft(null);
+    setMsg('err', '❌ ' + esc(chk.error) + '<br><span class="small">ค่าที่อ่านได้: ' + esc(text.slice(0, 120)) + '</span>');
     return;
   }
 
   var p = parseQr(text);
-  var item = {
-    scan_id: uid(), scanned_at: new Date().toISOString(), location: S.location,
+  var replaced = S.draft && S.draft.qr_raw !== p.qr_raw ? S.draft : null;
+  var dup = findSavedDuplicate(p.qr_raw);
+  setDraft({
     qr_raw: p.qr_raw, part_code: p.part_code, lot_no: p.lot_no, qty: p.qty, unit: p.unit, pkg_ref: p.pkg_ref,
+    scanned_at: new Date().toISOString()
+  });
+  if (dup) {
+    beep(false);
+    setMsg('err', '⚠ QR นี้บันทึกแล้วที่ <b>' + esc(dup.location) + '</b> เวลา ' + hhmm(dup.scanned_at) +
+      '<br>ถ้าต้องการย้าย ให้ลบรายการเดิมก่อน');
+    return;
+  }
+  beep(true);
+  setMsg('warn', (chk.fixed ? 'อ่านค่าซ้ำ 2 รอบในครั้งเดียว ระบบตัดให้เหลือ 1 แล้ว · ' : '') +
+    (replaced ? 'แทนที่รายการก่อนหน้า (' + esc(replaced.part_code) + ') · ' : '') +
+    (S.location ? 'ตรวจสอบแล้วกด <b>บันทึก</b>' : 'เลือก Location แล้วกด <b>บันทึก</b>'));
+}
+
+function findSavedDuplicate(qr) {
+  return S.recent.filter(function (r) { return r.qr_raw === qr && (r.status === 'pending' || r.status === 'saved'); })[0];
+}
+
+function setDraft(d) {
+  S.draft = d; storeJson('pda_draft', d);
+  renderDraft();
+}
+
+function renderDraft() {
+  var el = $('draft'); if (!el) return;
+  var d = S.draft;
+  if (!d) { el.innerHTML = ''; return; }
+  var dup = findSavedDuplicate(d.qr_raw);
+  el.innerHTML = '<section class="draft-card' + (dup ? ' bad' : '') + '">' +
+    '<div class="draft-head"><span>สแกนแล้ว · ยังไม่บันทึก</span><button class="link" id="dCancel">ยกเลิก</button></div>' +
+    '<div class="draft-part">' + esc(d.part_code || d.qr_raw) + '</div>' +
+    '<div class="row-sub">' +
+      (d.lot_no ? '<span>Lot ' + esc(d.lot_no) + '</span>' : '') +
+      (d.qty !== '' ? '<span><b>' + esc(fmtQty(d.qty, d.unit)) + '</b></span>' : '') +
+      (d.pkg_ref ? '<span class="muted">Pkg ' + esc(d.pkg_ref) + '</span>' : '') +
+    '</div>' +
+    (S.location
+      ? '<button class="btn primary save-btn" id="dSave"' + (dup ? ' disabled' : '') + '>💾 บันทึก → ' + esc(S.location) + '</button>'
+      : '<button class="btn warn save-btn" id="dPickLoc">📍 เลือก Location ก่อนบันทึก</button>') +
+  '</section>';
+  $('dCancel').onclick = function () { setDraft(null); setMsg('idle', 'ยกเลิกแล้ว — สแกนรายการใหม่ได้เลย'); focusScan(); };
+  if ($('dSave')) $('dSave').onclick = saveDraft;
+  if ($('dPickLoc')) $('dPickLoc').onclick = openLocationPicker;
+}
+
+function saveDraft() {
+  var d = S.draft; if (!d) return;
+  if (!S.user) { beep(false); setMsg('err', 'กรุณาใส่ชื่อผู้สแกนก่อน'); openUserModal(); return; }
+  if (!S.location) { beep(false); openLocationPicker(); return; }
+  var dup = findSavedDuplicate(d.qr_raw);
+  if (dup) { beep(false); setMsg('err', '⚠ QR นี้บันทึกแล้วที่ <b>' + esc(dup.location) + '</b>'); return; }
+  var item = {
+    scan_id: uid(), scanned_at: d.scanned_at || new Date().toISOString(), location: S.location,
+    qr_raw: d.qr_raw, part_code: d.part_code, lot_no: d.lot_no, qty: d.qty, unit: d.unit, pkg_ref: d.pkg_ref,
     scanned_by: S.user, device: S.device, status: 'pending'
   };
   S.recent.unshift(item);
   saveRecent();
+  setDraft(null);
   beep(true);
-  setMsg('ok', '✔ <b>' + esc(item.part_code) + '</b>' + (item.qty !== '' ? ' × ' + esc(fmtQty(item.qty, item.unit)) : '') +
+  setMsg('ok', '✔ บันทึก <b>' + esc(item.part_code) + '</b>' + (item.qty !== '' ? ' × ' + esc(fmtQty(item.qty, item.unit)) : '') +
     ' → <b>' + esc(item.location) + '</b>', item.scan_id);
   refreshScanParts();
   flush();
+  focusScan();
 }
 
 function setLocation(loc) {
   S.location = loc; store('pda_loc', loc);
-  renderLoc();
+  renderLoc(); renderDraft();
 }
 
 // ---------- ส่งขึ้นเซิร์ฟเวอร์ ----------
@@ -762,15 +837,23 @@ function deletePhotoUi(id, scanId, row) {
   render();
   if (!S.user) openUserModal();
 
-  // ถ้าโฟกัสหลุด (แตะที่ว่าง) ให้กลับไปที่ช่องสแกน เพื่อให้ปุ่มสแกนของเครื่องใช้ได้เสมอ
+  // โฟกัสต้องอยู่ที่ช่องสแกนเสมอ — หลังแตะปุ่ม โฟกัสจะค้างที่ปุ่ม ถ้าไม่ดึงกลับ ค่าที่สแกนจะหาย และ Enter จะไปกดปุ่มนั้นแทน
+  function isTextField(a) { return a && (a.tagName === 'INPUT' && a.type !== 'button' && a.type !== 'checkbox' && a.type !== 'radio' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT'); }
   document.addEventListener('click', function () { setTimeout(function () {
-    var a = document.activeElement;
-    if (S.view === 'scan' && (!a || a === document.body)) focusScan();
+    if (S.view === 'scan' && !isTextField(document.activeElement)) focusScan();
   }, 0); });
   document.addEventListener('keydown', function (e) {
-    var a = document.activeElement;
-    if (S.view === 'scan' && $('modal').classList.contains('hidden') && (!a || a === document.body) && e.key.length === 1) {
-      focusScan();
+    var a = document.activeElement, inp = $('scanInput');
+    if (S.view !== 'scan' || !inp || a === inp || isTextField(a) || !$('modal').classList.contains('hidden')) return;
+    if (e.key.length === 1) {
+      e.preventDefault(); // ส่งตัวอักษรนี้เข้าช่องสแกนเอง ไม่ให้หายตัวแรก
+      inp.focus({ preventScroll: true });
+      inp.value += e.key;
+      inp.dispatchEvent(new Event('input'));
+    } else if (e.key === 'Enter' || e.keyCode === 13) {
+      e.preventDefault(); // กัน Enter ไปกดปุ่มที่โฟกัสอยู่ (เช่น ปุ่มลบ)
+      commitScanInput();
+      inp.focus({ preventScroll: true });
     }
   }, true);
   document.addEventListener('visibilitychange', function () { if (!document.hidden) { focusScan(); flush(); } });
