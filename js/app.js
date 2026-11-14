@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261114-2340'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261115-0003'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -1086,36 +1086,60 @@ function openLocationPicker(opts) {
 }
 
 // ======================= สแกนด้วยกล้อง (โทรศัพท์) =======================
-// ใช้ BarcodeDetector ของเบราว์เซอร์ถ้ามี (Android Chrome) ไม่งั้นโหลด jsQR (iPhone / เบราว์เซอร์อื่น)
+// ลำดับตัวอ่าน: 1) ตัวอ่านในเบราว์เซอร์ (Android Chrome / iPhone ที่เปิด Shape Detection API) → 2) zxing (WebAssembly) → 3) jsQR
+// อ่านภาพต่อเนื่องทุกเฟรม · ขอภาพ 1920×1080 · อ่านเฉพาะกรอบกลางจอแบบเต็มความละเอียด · ซูม/โฟกัส/ไฟฉาย ถ้าเครื่องรองรับ
+var ZXING_URL = 'https://cdn.jsdelivr.net/npm/barcode-detector@2.2.2/dist/es/pure.min.js';
 var JSQR_URL = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js';
+var SCAN_FORMATS = ['qr_code', 'code_128', 'code_39', 'ean_13', 'data_matrix'];
+var CROP_RATIO = 0.7; // ขนาดกรอบกลางจอ (สัดส่วนของด้านสั้น)
+var IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+function firstValue(r) { return r && r.length ? r[0].rawValue : null; }
 
 function getDetector() {
   if (getDetector.p) return getDetector.p;
-  var native = ('BarcodeDetector' in window && BarcodeDetector.getSupportedFormats)
-    ? BarcodeDetector.getSupportedFormats().then(function (f) {
+  var native = (window.BarcodeDetector && window.BarcodeDetector.getSupportedFormats)
+    ? window.BarcodeDetector.getSupportedFormats().then(function (f) {
         if (f.indexOf('qr_code') < 0) throw new Error('no qr');
-        var want = ['qr_code', 'code_128', 'code_39', 'ean_13', 'data_matrix'].filter(function (x) { return f.indexOf(x) >= 0; });
-        var d = new BarcodeDetector({ formats: want });
-        return function (src) { return d.detect(src).then(function (r) { return r.length ? r[0].rawValue : null; }); };
+        var d = new window.BarcodeDetector({ formats: SCAN_FORMATS.filter(function (x) { return f.indexOf(x) >= 0; }) });
+        return { name: 'native', label: IS_IOS ? 'ตัวอ่านของ Apple (Shape Detection)' : 'ตัวอ่านในเบราว์เซอร์', crop: false,
+                 detect: function (src) { return d.detect(src).then(firstValue); } };
       })
     : Promise.reject(new Error('no native'));
   getDetector.p = native.catch(function () {
+    return import(ZXING_URL).then(function (m) {
+      var d = new m.BarcodeDetector({ formats: SCAN_FORMATS });
+      return { name: 'zxing', label: 'zxing', crop: true, detect: function (src) { return d.detect(src).then(firstValue); } };
+    });
+  }).catch(function () {
     return loadScriptOnce(JSQR_URL).then(function () {
-      var c = document.createElement('canvas'), g = c.getContext('2d', { willReadFrequently: true });
-      return function (src) {
-        var w = src.videoWidth || src.width, h = src.videoHeight || src.height;
-        if (!w || !h) return Promise.resolve(null);
-        var k = Math.min(1, 800 / Math.max(w, h));
-        c.width = Math.round(w * k); c.height = Math.round(h * k);
-        g.drawImage(src, 0, 0, c.width, c.height);
-        var img = g.getImageData(0, 0, c.width, c.height);
-        var r = window.jsQR(img.data, c.width, c.height, { inversionAttempts: 'attemptBoth' });
+      return { name: 'jsqr', label: 'jsQR (สำรอง)', crop: true, detect: function (src) {
+        var g = src.getContext('2d', { willReadFrequently: true });
+        var r = window.jsQR(g.getImageData(0, 0, src.width, src.height).data, src.width, src.height, { inversionAttempts: 'attemptBoth' });
         return Promise.resolve(r && r.data ? r.data : null);
-      };
+      } };
     });
   });
   getDetector.p.catch(function () { getDetector.p = null; });
   return getDetector.p;
+}
+
+var camCanvas = null;
+// ตัดกรอบกลางภาพแบบเต็มความละเอียด (full = ทั้งภาพ ย่อไม่เกิน 1280 — ใช้สลับเป็นระยะเผื่อ QR อยู่นอกกรอบ)
+function grabFrame(src, full) {
+  var w = src.videoWidth || src.width, h = src.videoHeight || src.height;
+  if (!w || !h) return null;
+  var sx = 0, sy = 0, sw = w, sh = h, ow, oh;
+  if (full) { var k = Math.min(1, 1280 / Math.max(w, h)); ow = Math.round(w * k); oh = Math.round(h * k); }
+  else {
+    var side = Math.round(Math.min(w, h) * CROP_RATIO);
+    sx = Math.round((w - side) / 2); sy = Math.round((h - side) / 2); sw = sh = side;
+    ow = oh = Math.min(side, 1000);
+  }
+  camCanvas = camCanvas || document.createElement('canvas');
+  camCanvas.width = ow; camCanvas.height = oh;
+  camCanvas.getContext('2d', { willReadFrequently: true }).drawImage(src, sx, sy, sw, sh, 0, 0, ow, oh);
+  return camCanvas;
 }
 
 function openCameraScanner(onResult) {
@@ -1123,28 +1147,46 @@ function openCameraScanner(onResult) {
     toast('เบราว์เซอร์นี้เปิดกล้องไม่ได้ (ต้องเปิดผ่าน https)', 3500); return;
   }
   openModal('<h3>สแกนด้วยกล้อง</h3>' +
-    '<div class="cam-wrap"><video id="camV" playsinline muted autoplay></video><div class="cam-frame"></div></div>' +
-    '<p class="muted small center" id="camHint">กำลังเปิดกล้อง…</p>' +
+    '<div class="cam-wrap"><video id="camV" playsinline muted autoplay></video><div class="cam-frame" id="camFrame"></div></div>' +
+    '<div class="cam-tools" id="camTools"></div>' +
+    '<p class="center small" id="camHint">กำลังเปิดกล้อง…</p>' +
+    '<p class="muted small center" id="camInfo"></p>' +
     '<div class="actions"><button class="btn" id="camClose">ปิด</button></div>', true);
-  var video = $('camV'), stream = null, done = false;
+  var video = $('camV'), stream = null, done = false, track = null;
   function stop() { done = true; if (stream) stream.getTracks().forEach(function (t) { t.stop(); }); }
   $('camClose').onclick = function () { stop(); closeModal(); };
-  var cam = navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+
+  var cam = navigator.mediaDevices.getUserMedia({
+    video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false
+  });
   Promise.all([cam, getDetector()]).then(function (res) {
     stream = res[0];
-    var detect = res[1];
+    var det = res[1];
     if (done) { stop(); return; }
+    track = stream.getVideoTracks()[0];
     video.srcObject = stream;
     return video.play().then(function () {
-      if ($('camHint')) $('camHint').textContent = 'เล็ง QR ให้อยู่ในกรอบ';
-      (function tick() {
+      sizeFrame();
+      setupCamTools(track);
+      if ($('camHint')) $('camHint').innerHTML = 'เล็ง QR ให้อยู่ในกรอบ' + (IS_IOS ? ' · <b>ถือห่างประมาณ 20–30 ซม.</b>' : '');
+      if ($('camInfo')) $('camInfo').textContent = 'ตัวอ่าน: ' + det.label + ' · ' + video.videoWidth + '×' + video.videoHeight;
+      var n = 0;
+      function next() {
         if (done) return;
-        detect(video).then(function (text) {
+        if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(function () { tick(); });
+        else requestAnimationFrame(tick);
+      }
+      function tick() {
+        if (done) return;
+        var src = det.crop ? grabFrame(video, n++ % 4 === 3) : video;
+        if (!src) { next(); return; }
+        det.detect(src).then(function (text) {
           if (done) return;
           if (text) { stop(); closeModal(); onResult(text); return; }
-          setTimeout(tick, 120);
-        }, function () { setTimeout(tick, 250); });
-      })();
+          next();
+        }, function () { setTimeout(next, 100); });
+      }
+      next();
     });
   }).catch(function (err) {
     cam.then(function (s) { s.getTracks().forEach(function (t) { t.stop(); }); }, function () {});
@@ -1155,6 +1197,48 @@ function openCameraScanner(onResult) {
       : 'เปิดกล้องไม่ได้: ' + ((err && (err.message || err.name)) || err);
     if ($('camHint')) $('camHint').textContent = msg; else toast(msg, 4000);
   });
+
+  // กรอบเล็งให้ตรงกับพื้นที่ที่ตัดไปอ่าน
+  function sizeFrame() {
+    var f = $('camFrame'), wrap = video.parentNode; if (!f || !wrap) return;
+    var side = Math.round(Math.min(wrap.clientWidth, wrap.clientHeight) * CROP_RATIO);
+    f.style.width = f.style.height = side + 'px';
+  }
+}
+
+// ซูม / โฟกัสต่อเนื่อง / ไฟฉาย — แสดงเฉพาะที่เครื่องและเบราว์เซอร์รองรับ
+function setupCamTools(track) {
+  var box = $('camTools'); if (!box || !track || !track.getCapabilities) return;
+  var caps = {};
+  try { caps = track.getCapabilities() || {}; } catch (e) { return; }
+  if (caps.focusMode && caps.focusMode.indexOf('continuous') >= 0) {
+    track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(function () {});
+  }
+  var html = '';
+  var zooms = [];
+  if (caps.zoom && caps.zoom.max > caps.zoom.min) {
+    zooms = [1, 1.5, 2, 3].filter(function (z) { return z >= caps.zoom.min && z <= caps.zoom.max; });
+    if (zooms.length > 1) html += zooms.map(function (z) { return '<button class="btn small" data-zoom="' + z + '">' + z + 'x</button>'; }).join('');
+  }
+  if (caps.torch) html += '<button class="btn small" id="camTorch">🔦 ไฟฉาย</button>';
+  box.innerHTML = html;
+  function setZoom(z) {
+    track.applyConstraints({ advanced: [{ zoom: z }] }).then(function () {
+      store('pda_cam_zoom', String(z));
+      Array.prototype.forEach.call(box.querySelectorAll('[data-zoom]'), function (b) { b.classList.toggle('active', Number(b.getAttribute('data-zoom')) === z); });
+    }, function () {});
+  }
+  if (zooms.length > 1) {
+    Array.prototype.forEach.call(box.querySelectorAll('[data-zoom]'), function (b) { b.onclick = function () { setZoom(Number(b.getAttribute('data-zoom'))); }; });
+    var saved = Number(store('pda_cam_zoom'));
+    setZoom(zooms.indexOf(saved) >= 0 ? saved : (zooms.indexOf(1.5) >= 0 ? 1.5 : zooms[0]));
+  }
+  var torchOn = false;
+  if ($('camTorch')) $('camTorch').onclick = function () {
+    torchOn = !torchOn;
+    track.applyConstraints({ advanced: [{ torch: torchOn }] }).catch(function () {});
+    $('camTorch').classList.toggle('active', torchOn);
+  };
 }
 
 // ======================= หน้ากรอกเอง =======================

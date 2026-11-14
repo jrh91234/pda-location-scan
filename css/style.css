@@ -141,7 +141,9 @@ section { margin-bottom: 12px; }
 .cam-btn { width: 100%; margin: -4px 0 12px; }
 .cam-wrap { position: relative; background: #000; border-radius: 12px; overflow: hidden; }
 .cam-wrap video { width: 100%; max-height: 60vh; display: block; object-fit: cover; }
-.cam-frame { position: absolute; inset: 15% 15%; border: 3px solid rgba(255,255,255,.85); border-radius: 12px; box-shadow: 0 0 0 9999px rgba(0,0,0,.25); pointer-events: none; }
+.cam-frame { position: absolute; top: 50%; left: 50%; width: 60%; aspect-ratio: 1; transform: translate(-50%, -50%); border: 3px solid rgba(255,255,255,.9); border-radius: 12px; box-shadow: 0 0 0 9999px rgba(0,0,0,.3); pointer-events: none; }
+.cam-tools { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; margin-top: 8px; }
+.cam-tools .btn.active { background: var(--blue); border-color: var(--blue); color: #fff; }
 .card-form { background: var(--card); border-radius: 14px; padding: 12px; }
 .card-form label { display: block; font-weight: 600; margin: 10px 0 4px; font-size: 14px; }
 .loc-pick { width: 100%; text-align: left; font-size: 18px; }
