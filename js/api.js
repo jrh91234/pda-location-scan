@@ -23,6 +23,17 @@ function withNonce(url) {
   return url + (url.indexOf('?') >= 0 ? '&' : '?') + '_r=' + Date.now() + Math.random().toString(36).slice(2, 8);
 }
 
+// Apps Script ตอบข้อความตามภาษาบัญชี Google ของเจ้าของ (อาจเป็นภาษาจีน) — แปลงเรื่องสิทธิ์ให้อ่านง่าย
+function friendlyError(msg) {
+  if (/googleapis\.com\/auth\/drive/i.test(msg)) {
+    return 'ระบบยังไม่ได้รับสิทธิ์ Google Drive สำหรับเก็บรูป — ผู้ดูแลต้องเปิด Google Sheet แล้วกดเมนู PDA Scan → ตั้งค่าเริ่มต้น → อนุญาต (รูปจะรอส่งในเครื่องจนกว่าจะอนุญาต)';
+  }
+  if (/googleapis\.com\/auth\/|authorization is required|权限|permission/i.test(msg)) {
+    return 'ระบบยังไม่ได้รับอนุญาตจากเจ้าของ — ผู้ดูแลต้องเปิด Google Sheet แล้วกดเมนู PDA Scan → ตั้งค่าเริ่มต้น → อนุญาต';
+  }
+  return msg;
+}
+
 function api(action) {
   var args = Array.prototype.slice.call(arguments, 1);
   var url = apiUrl();
@@ -46,7 +57,7 @@ function api(action) {
     throw err;
   }).then(function (res) {
     if (timer) clearTimeout(timer);
-    if (!res.ok) throw new Error(res.error || 'เกิดข้อผิดพลาด');
+    if (!res.ok) throw new Error(friendlyError(res.error || 'เกิดข้อผิดพลาด'));
     return res.data;
   }, function (err) {
     if (timer) clearTimeout(timer);
