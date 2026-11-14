@@ -1,0 +1,69 @@
+name: Deploy Google Apps Script
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'appscript/**'
+      - '.github/workflows/deploy-appscript.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-appscript
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Clasp
+        # Pinned so the ~/.clasprc.json format matches `npx @google/clasp@2.4.2 login`.
+        run: npm install -g @google/clasp@2.4.2
+
+      - name: Check required secrets
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+          APPS_SCRIPT_ID: ${{ secrets.APPS_SCRIPT_ID }}
+          APPS_SCRIPT_DEPLOYMENT_ID: ${{ secrets.APPS_SCRIPT_DEPLOYMENT_ID }}
+        run: |
+          missing=0
+          for name in CLASPRC_JSON APPS_SCRIPT_ID APPS_SCRIPT_DEPLOYMENT_ID; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing GitHub secret: $name"
+              missing=1
+            fi
+          done
+          exit $missing
+
+      - name: Create clasprc.json Credentials
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          printf '%s' "$CLASPRC_JSON" > ~/.clasprc.json
+          node -e "JSON.parse(require('fs').readFileSync(process.env.HOME + '/.clasprc.json','utf8'))" \
+            || (echo "::error::CLASPRC_JSON is not valid JSON" && exit 1)
+
+      - name: Configure Apps Script project
+        env:
+          APPS_SCRIPT_ID: ${{ secrets.APPS_SCRIPT_ID }}
+        run: |
+          # Always deploy to the script set in secrets, never the scriptId committed in .clasp.json.
+          printf '{"scriptId":"%s","rootDir":"./appscript"}\n' "$APPS_SCRIPT_ID" > .clasp.json
+
+      - name: Push and Deploy to Apps Script
+        env:
+          APPS_SCRIPT_DEPLOYMENT_ID: ${{ secrets.APPS_SCRIPT_DEPLOYMENT_ID }}
+        run: |
+          # Updating the existing deployment keeps the /exec URL in js/config.js unchanged.
+          clasp push --force
+          clasp deploy --deploymentId "$APPS_SCRIPT_DEPLOYMENT_ID" \
+            --description "GitHub Actions ${GITHUB_SHA::7}"

@@ -1,0 +1,13 @@
+# เอกสาร/รูปจริงของบริษัท — ห้ามขึ้น GitHub (repo เป็น Public)
+*.pdf
+*.jpg
+*.jpeg
+*.png
+*.xlsx
+*.csv
+
+# เครื่องมือ / ไฟล์ส่วนตัว
+node_modules/
+.claude/
+.clasprc.json
+__pycache__/
