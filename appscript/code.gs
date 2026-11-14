@@ -109,6 +109,30 @@ function allowDuplicate_() {
   return PropertiesService.getScriptProperties().getProperty('ALLOW_DUPLICATE_QR') === 'true';
 }
 
+/**
+ * ตรวจ QR ซ้ำอีกชั้นที่เซิร์ฟเวอร์ (กันเครื่องที่ยังเปิดหน้าเว็บเวอร์ชันเก่า)
+ *  - ข้อความเบิ้ล ABCABC → ตัดเหลือ ABC
+ *  - ป้าย Warehouse (รหัส*Lot*จำนวน*แพ็กเกจ) ที่มี * เกิน 4 ส่วน = 2 ป้ายติดกัน → ไม่บันทึก
+ */
+function checkQr_(text) {
+  let fixed = false;
+  if (text.length >= 6 && text.length % 2 === 0) {
+    const h = text.length / 2;
+    if (text.slice(0, h) === text.slice(h)) { text = text.slice(0, h); fixed = true; }
+  }
+  const parts = text.split('*');
+  const isQty = function (v) { return String(v || '').trim() !== '' && !isNaN(Number(String(v).replace(/,/g, ''))); };
+  if (parts.length > 4 && isQty(parts[2])) {
+    return { text: text, fixed: fixed, error: 'QR ผิดรูปแบบ อาจสแกนติดกัน 2 ครั้ง — กรุณาลบแล้วสแกนใหม่' };
+  }
+  let parsed = null;
+  if (parts.length >= 3 && parts.length <= 4 && parts[0] && isQty(parts[2])) {
+    const q = Number(String(parts[2]).replace(/,/g, ''));
+    parsed = { part_code: parts[0].trim(), lot_no: (parts[1] || '').trim(), qty: q, unit: Math.floor(q) === q ? 'EA' : 'kg', pkg_ref: (parts[3] || '').trim() };
+  }
+  return { text: text, fixed: fixed, error: '', parsed: parsed };
+}
+
 // ======================= API =======================
 function ping() {
   return { time: fmt_(new Date()), allowDuplicate: allowDuplicate_() };
@@ -137,9 +161,12 @@ function saveScans(items) {
 
     items.forEach(function (it) {
       const id = clean_(it.scan_id, 64);
-      const qr = clean_(it.qr_raw, 500);
       const loc = clean_(it.location, 40).toUpperCase();
+      const chk = checkQr_(clean_(it.qr_raw, 500));
+      const qr = chk.text;
       if (!id || !qr || !loc) { results.push({ scan_id: id, result: 'invalid', error: 'ข้อมูลไม่ครบ (QR / Location)' }); return; }
+      if (chk.error) { results.push({ scan_id: id, result: 'invalid', error: chk.error }); return; }
+      if (chk.fixed && chk.parsed) Object.assign(it, chk.parsed); // ค่าที่เครื่องแยกมาจากข้อความเบิ้ล → ใช้ค่าที่แยกใหม่
       if (byId[id]) { results.push({ scan_id: id, result: 'exists' }); return; }
       const dup = activeByQr[qr];
       if (dup && !allowDup) {

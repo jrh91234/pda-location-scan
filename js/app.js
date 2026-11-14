@@ -1,6 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
+var APP_VERSION = '20261114-1631'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -78,7 +79,7 @@ function render() {
   var pending = S.recent.filter(function (r) { return r.status === 'pending'; }).length;
   $('app').innerHTML =
     '<header class="top">' +
-      '<div class="brand">PDA Scan</div>' +
+      '<div class="brand">PDA Scan <span class="ver">v' + esc(APP_VERSION) + '</span></div>' +
       '<button class="chip" id="btnUser">' + (S.user ? '👤 ' + esc(S.user) : '👤 ใส่ชื่อ') + '</button>' +
       '<span id="net" class="dot ' + (S.online ? 'on' : 'off') + '" title="สถานะเครือข่าย"></span>' +
       '<button class="icon" id="btnSettings" aria-label="ตั้งค่า">⚙</button>' +
@@ -861,4 +862,25 @@ function deletePhotoUi(id, scanId, row) {
   window.addEventListener('offline', function () { S.online = false; refreshScanParts(); });
   setInterval(function () { flush(); flushPhotos(); }, 8000);
   flush(); flushPhotos();
+  setInterval(checkUpdate, 60000);
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) checkUpdate(); });
+  setTimeout(checkUpdate, 3000);
 })();
+
+// ---------- อัปเดตอัตโนมัติ ----------
+// GitHub Pages ให้เบราว์เซอร์ cache ไฟล์ได้ 10 นาที → เครื่องที่เปิดค้างไว้อาจใช้โค้ดเก่า
+// เช็ค version.json แบบไม่ใช้ cache ถ้ามีเวอร์ชันใหม่ ให้โหลดหน้าใหม่ด้วย URL ใหม่ (?v=) ตอนที่ไม่ได้ทำอะไรค้างอยู่
+var updateReady = null;
+function checkUpdate() {
+  if (APP_VERSION === 'dev' || !window.fetch) return;
+  fetch('version.json?_=' + Date.now(), { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
+    if (d && d.version && d.version !== APP_VERSION) { updateReady = d.version; tryReload(); }
+  }, function () {});
+}
+function tryReload() {
+  if (!updateReady) return;
+  var inp = $('scanInput');
+  var busy = S.draft || S.syncing || S.photoSyncing || !$('modal').classList.contains('hidden') || (inp && inp.value);
+  if (busy) { setTimeout(tryReload, 5000); return; }
+  location.replace(location.pathname + '?v=' + encodeURIComponent(updateReady));
+}

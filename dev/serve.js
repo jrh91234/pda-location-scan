@@ -19,7 +19,7 @@ http.createServer((req, res) => {
   let body = fs.readFileSync(file);
   if (url === '/index.html') {
     body = body.toString('utf8')
-      .replace('<script src="js/config.js"></script>', MOCK + '\n<script src="js/config.js"></script><script>PDA_CONFIG.API_URL = MOCK_API_URL;</script>')
+      .replace(/<script src="js\/config\.js[^"]*"><\/script>/, (tag) => MOCK + '\n' + tag + '<script>PDA_CONFIG.API_URL = MOCK_API_URL;</script>')
       .replace('</body>', '<button onclick="gasMockReset()" style="position:fixed;right:6px;bottom:6px;z-index:99;font-size:11px;opacity:.5">reset mock</button></body>');
   }
   res.writeHead(200, { 'Content-Type': (TYPES[path.extname(file)] || 'application/octet-stream') + '; charset=utf-8', 'Cache-Control': 'no-store' });
