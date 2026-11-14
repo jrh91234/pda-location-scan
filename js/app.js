@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261114-1701'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261114-1704'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -224,7 +224,7 @@ function renderRecent() {
       '<div class="row-main">' +
         '<div class="row-top"><b class="part">' + esc(r.part_code || r.qr_raw) + '</b><span class="tag ' + r.status + '">' + STATUS_TEXT[r.status] + '</span></div>' +
         '<div class="row-sub">' +
-          '<span class="loc-pill">' + esc(r.location) + '</span>' +
+          locChip(r, r.status === 'pending' || r.status === 'saved', 'data-loc-edit') +
           (r.lot_no ? '<span>Lot ' + esc(r.lot_no) + '</span>' : '') +
           qtyChip(r, r.status === 'pending' || r.status === 'saved', 'data-qty') +
           '<span class="muted">' + hhmm(r.scanned_at) + '</span>' +
@@ -246,6 +246,9 @@ function renderRecent() {
   bindPhotoButtons(el, function () { return null; });
   Array.prototype.forEach.call(el.querySelectorAll('[data-qty]'), function (b) {
     b.onclick = function () { editRecentQty(b.getAttribute('data-qty')); };
+  });
+  Array.prototype.forEach.call(el.querySelectorAll('[data-loc-edit]'), function (b) {
+    b.onclick = function () { editRecentLocation(b.getAttribute('data-loc-edit')); };
   });
 }
 
@@ -500,6 +503,82 @@ function editHistoryQty(row) {
   } });
 }
 
+// ---------- ย้าย Location หลังบันทึก ----------
+// ยังไม่ส่ง (รอส่ง) → เปลี่ยนในเครื่องได้เลย · บันทึกแล้ว → ส่งไปเซิร์ฟเวอร์พร้อมเหตุผล (เก็บ Location แรกไว้ตรวจสอบ)
+var LOC_REASONS = ['สแกนผิด Location', 'ย้ายของไปที่ใหม่', 'อื่นๆ'];
+
+function locChip(r, editable, attr) {
+  var moved = r.location_original && r.location_original !== r.location
+    ? '<span class="muted small">(เดิม ' + esc(r.location_original) + ')</span>' : '';
+  if (!editable) return '<span class="loc-pill">' + esc(r.location) + '</span>' + moved;
+  return '<button class="loc-pill loc-edit" ' + attr + '="' + esc(r.scan_id) + '">' + esc(r.location) + ' ✏️</button>' + moved;
+}
+
+function confirmMoveModal(rec, newLoc, onSave) {
+  openModal('<h3>ย้าย Location</h3>' +
+    '<div class="card-lite"><b>' + esc(rec.part_code || rec.qr_raw) + '</b>' + (rec.qty !== '' ? ' · ' + esc(fmtQty(rec.qty, rec.unit)) : '') +
+      '<div class="move-line"><span class="loc-pill">' + esc(rec.location) + '</span> → <span class="loc-pill new">' + esc(newLoc) + '</span></div></div>' +
+    '<label>เหตุผล</label><div class="reasons">' +
+      LOC_REASONS.map(function (x, i) { return '<label class="radio"><input type="radio" name="lreason" value="' + esc(x) + '"' + (i === 0 ? ' checked' : '') + '> ' + esc(x) + '</label>'; }).join('') +
+    '</div><input id="lOther" class="field hidden" placeholder="ระบุเหตุผล">' +
+    '<p class="muted small">ระบบเก็บ Location เดิม ผู้แก้ไข และเวลาไว้ในชีตเพื่อตรวจสอบย้อนหลัง</p>' +
+    '<div class="actions"><button class="btn" id="mCancel">ยกเลิก</button><button class="btn primary" id="mOk">ยืนยันย้าย</button></div>');
+  Array.prototype.forEach.call(document.querySelectorAll('input[name=lreason]'), function (x) {
+    x.onchange = function () { $('lOther').classList.toggle('hidden', x.value !== 'อื่นๆ' || !x.checked); };
+  });
+  $('mCancel').onclick = closeModal;
+  $('mOk').onclick = function () {
+    var note = document.querySelector('input[name=lreason]:checked').value;
+    if (note === 'อื่นๆ') { note = $('lOther').value.trim(); if (!note) { toast('กรุณาระบุเหตุผล'); return; } }
+    var btn = $('mOk'); btn.disabled = true; btn.textContent = 'กำลังบันทึก…';
+    onSave(note).then(function () { closeModal(); toast('ย้าย Location แล้ว'); },
+      function (err) { btn.disabled = false; btn.textContent = 'ยืนยันย้าย'; toast(err.message, 3500); });
+  };
+}
+
+function applyServerLocation(rec) {
+  var r = findRecent(rec.scan_id);
+  if (r) { r.location = rec.location; r.location_original = rec.location_original; r.edited_by = rec.edited_by; r.edited_at = rec.edited_at; saveRecent(); }
+  var rows = S.hist.data && S.hist.data.rows;
+  if (rows) rows.forEach(function (x) { if (x.scan_id === rec.scan_id) Object.assign(x, rec, { photos: x.photos }); });
+}
+
+function pickNewLocation(rec, then) {
+  openLocationPicker({ current: rec.location, title: 'ย้าย ' + (rec.part_code || '') + ' ไป Location ใหม่', onPick: function (code) {
+    if (code === rec.location) { toast('เป็น Location เดิม'); return; }
+    then(code);
+  } });
+}
+
+function editRecentLocation(id) {
+  var r = findRecent(id); if (!r) return;
+  if (r.status === 'pending') {
+    if (S.syncing) { toast('กำลังส่งข้อมูล รอสักครู่แล้วลองใหม่'); return; }
+    pickNewLocation(r, function (code) {
+      if (r.status !== 'pending') { toast('รายการนี้ส่งไปแล้ว กรุณาแก้อีกครั้ง'); return; }
+      r.location = code; saveRecent(); refreshScanParts(); toast('เปลี่ยนเป็น ' + code + ' แล้ว');
+    });
+    return;
+  }
+  if (r.status !== 'saved') return;
+  if (!S.user) { openUserModal(); return; }
+  pickNewLocation(r, function (code) {
+    confirmMoveModal(r, code, function (note) {
+      return api('updateLocation', r.scan_id, code, S.user, note).then(function (rec) { applyServerLocation(rec); refreshScanParts(); });
+    });
+  });
+}
+
+function editHistoryLocation(row) {
+  if (!row || row.status === 'deleted') return;
+  if (!S.user) { openUserModal(); return; }
+  pickNewLocation(row, function (code) {
+    confirmMoveModal(row, code, function (note) {
+      return api('updateLocation', row.scan_id, code, S.user, note).then(function (rec) { applyServerLocation(rec); renderHistoryList(); });
+    });
+  });
+}
+
 // ---------- ลบ ----------
 function deleteRecent(id) {
   var r = findRecent(id); if (!r) return;
@@ -608,7 +687,7 @@ function renderHistoryList() {
       return '<div class="row ' + (del ? 'st-deleted' : '') + '">' +
         '<div class="row-main">' +
           '<div class="row-top"><b class="part">' + esc(r.part_code || r.qr_raw) + '</b>' + (del ? '<span class="tag deleted">ลบแล้ว</span>' : '') + '</div>' +
-          '<div class="row-sub"><span class="loc-pill">' + esc(r.location) + '</span>' +
+          '<div class="row-sub">' + locChip(r, !del, 'data-hloc') +
             (r.lot_no ? '<span>Lot ' + esc(r.lot_no) + '</span>' : '') +
             qtyChip(r, !del, 'data-hqty') + photoChip(r.scan_id, r) + '</div>' +
           '<div class="row-sub muted"><span>' + esc(r.scanned_by) + '</span><span>' + esc(r.scanned_at) + '</span></div>' +
@@ -619,6 +698,9 @@ function renderHistoryList() {
       '</div>';
     }).join('');
   bindPhotoButtons(el, function (id) { return d.rows.filter(function (x) { return x.scan_id === id; })[0] || null; });
+  Array.prototype.forEach.call(el.querySelectorAll('[data-hloc]'), function (b) {
+    b.onclick = function () { editHistoryLocation(d.rows.filter(function (x) { return x.scan_id === b.getAttribute('data-hloc'); })[0]); };
+  });
   Array.prototype.forEach.call(el.querySelectorAll('[data-hqty]'), function (b) {
     b.onclick = function () { editHistoryQty(d.rows.filter(function (x) { return x.scan_id === b.getAttribute('data-hqty'); })[0]); };
   });
@@ -739,11 +821,14 @@ var LOC_TREE = (function () {
   return tree;
 })();
 
-function openLocationPicker() {
-  var cur = (S.location || '').match(/^([A-Z0-9]+)-(\d+)-/);
+// opts (ไม่บังคับ): { current, title, onPick(code) } — ไม่ส่ง = เปลี่ยน Location ปัจจุบันของเครื่อง
+function openLocationPicker(opts) {
+  opts = opts && typeof opts.onPick === 'function' ? opts : null;
+  var curLoc = opts ? (opts.current || '') : S.location;
+  var cur = (curLoc || '').match(/^([A-Z0-9]+)-(\d+)-/);
   var zones = Object.keys(LOC_TREE);
   var st = { zone: cur ? cur[1] : zones[0], rack: cur ? cur[2] : null, q: '' };
-  openModal('<h3>เลือก Location</h3>' +
+  openModal('<h3>' + esc(opts && opts.title || 'เลือก Location') + '</h3>' +
     '<input id="locQ" class="field" placeholder="พิมพ์ค้นหา เช่น CO-01-05" autocomplete="off">' +
     '<div id="locBody"></div>' +
     '<div class="actions"><button class="btn" id="mCancel">ปิด</button></div>');
@@ -756,7 +841,10 @@ function openLocationPicker() {
     if (exact) choose(exact);
   });
 
-  function choose(code) { setLocation(code); closeModal(); beep(true); setMsg('ok', '📍 Location: <b>' + esc(code) + '</b>'); }
+  function choose(code) {
+    if (opts) { closeModal(); opts.onPick(code); return; }
+    setLocation(code); closeModal(); beep(true); setMsg('ok', '📍 Location: <b>' + esc(code) + '</b>');
+  }
 
   function draw() {
     var body = $('locBody'); var html = '';
@@ -776,7 +864,7 @@ function openLocationPicker() {
     Array.prototype.forEach.call(body.querySelectorAll('[data-rack]'), function (b) { b.onclick = function () { st.rack = b.getAttribute('data-rack'); draw(); }; });
     Array.prototype.forEach.call(body.querySelectorAll('[data-loc]'), function (b) { b.onclick = function () { choose(b.getAttribute('data-loc')); }; });
   }
-  function btn(code, label) { return '<button data-loc="' + esc(code) + '" class="' + (code === S.location ? 'active' : '') + '">' + esc(label) + '</button>'; }
+  function btn(code, label) { return '<button data-loc="' + esc(code) + '" class="' + (code === curLoc ? 'active' : '') + '">' + esc(label) + '</button>'; }
   draw();
 }
 

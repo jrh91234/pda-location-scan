@@ -9,14 +9,14 @@
 const SHEET_NAME = 'Scans';
 const HEADERS = ['scan_id', 'scanned_at', 'saved_at', 'location', 'qr_raw', 'part_code', 'lot_no', 'qty', 'unit',
                  'pkg_ref', 'scanned_by', 'device', 'status', 'deleted_by', 'deleted_at', 'delete_reason',
-                 'qty_original', 'edited_by', 'edited_at', 'edit_note'];
+                 'qty_original', 'edited_by', 'edited_at', 'edit_note', 'location_original'];
 // คอลัมน์ที่ต้องเก็บเป็นข้อความ (กันเลข 0 นำหน้าหาย / กัน Sheets แปลงเป็นวันที่หรือตัวเลข)
-const TEXT_COLS = ['scan_id', 'location', 'qr_raw', 'part_code', 'lot_no', 'pkg_ref', 'scanned_by', 'device'];
+const TEXT_COLS = ['scan_id', 'location', 'location_original', 'qr_raw', 'part_code', 'lot_no', 'pkg_ref', 'scanned_by', 'device'];
 const TZ = 'Asia/Bangkok';
 const MAX_BATCH = 50;
 
 // ======================= Web App =======================
-const API_ACTIONS = { ping: ping, saveScans: saveScans, listScans: listScans, deleteScan: deleteScan, updateQty: updateQty,
+const API_ACTIONS = { ping: ping, saveScans: saveScans, listScans: listScans, deleteScan: deleteScan, updateQty: updateQty, updateLocation: updateLocation,
   uploadPhoto: uploadPhoto, getPhoto: getPhoto, deletePhoto: deletePhoto };
 
 function doPost(e) {
@@ -103,7 +103,8 @@ function toClient_(o) {
     status: String(o.status || 'active'), deleted_by: String(o.deleted_by || ''),
     deleted_at: fmt_(o.deleted_at), delete_reason: String(o.delete_reason || ''),
     qty_original: o.qty_original === '' || o.qty_original == null ? '' : Number(o.qty_original),
-    edited_by: String(o.edited_by || ''), edited_at: fmt_(o.edited_at), edit_note: String(o.edit_note || '')
+    edited_by: String(o.edited_by || ''), edited_at: fmt_(o.edited_at), edit_note: String(o.edit_note || ''),
+    location_original: String(o.location_original || '')
   };
 }
 
@@ -187,7 +188,7 @@ function saveScans(items) {
         qty: qty, unit: clean_(it.unit, 10), pkg_ref: clean_(it.pkg_ref, 80),
         scanned_by: clean_(it.scanned_by, 60), device: clean_(it.device, 60),
         status: 'active', deleted_by: '', deleted_at: '', delete_reason: '',
-        qty_original: '', edited_by: '', edited_at: '', edit_note: ''
+        qty_original: '', edited_by: '', edited_at: '', edit_note: '', location_original: ''
       };
       toAppend.push(HEADERS.map(function (h) { return rec[h]; }));
       byId[id] = rec;
@@ -258,6 +259,40 @@ function updateQty(scanId, qty, editedBy, note) {
     sh.getRange(row._row, HEADERS.indexOf('qty') + 1).setValue(n);
     const c = HEADERS.indexOf('qty_original') + 1;
     sh.getRange(row._row, c, 1, 4).setValues([[orig, by, now, row.edit_note]]);
+    return toClient_(row);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * ย้าย Location หลังบันทึก — เก็บ Location แรกไว้ใน location_original + ใคร/เมื่อไร/เหตุผล
+ * อัปเดตคอลัมน์ location ในชีต Photos ของรายการนี้ด้วย
+ */
+function updateLocation(scanId, location, editedBy, note) {
+  const id = clean_(scanId, 64), by = clean_(editedBy, 60);
+  const loc = clean_(location, 40).toUpperCase();
+  if (!id) throw new Error('ไม่พบรหัสรายการ');
+  if (!by) throw new Error('กรุณาระบุชื่อผู้แก้ไข');
+  if (!/^[A-Z0-9][A-Z0-9-]{1,39}$/.test(loc)) throw new Error('Location ไม่ถูกต้อง');
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const sh = sheet_();
+    const row = readAll_(sh).filter(function (r) { return String(r.scan_id) === id; })[0];
+    if (!row) throw new Error('ไม่พบรายการนี้ในระบบ');
+    if (String(row.status) === 'deleted') throw new Error('รายการนี้ถูกลบแล้ว ย้าย Location ไม่ได้');
+    if (String(row.location) === loc) return toClient_(row);
+    const now = new Date();
+    const orig = String(row.location_original || '') || String(row.location);
+    const n = clean_(note, 200);
+    row.location = loc; row.location_original = orig; row.edited_by = by; row.edited_at = now; row.edit_note = n;
+    sh.getRange(row._row, HEADERS.indexOf('location') + 1).setValue(loc);
+    sh.getRange(row._row, HEADERS.indexOf('edited_by') + 1, 1, 4).setValues([[by, now, n, orig]]);
+    const ps = book_().getSheetByName(PHOTO_SHEET);
+    if (ps) readPhotos_(ps).forEach(function (p) {
+      if (String(p.scan_id) === id) ps.getRange(p._row, PHOTO_HEADERS.indexOf('location') + 1).setValue(loc);
+    });
     return toClient_(row);
   } finally {
     lock.releaseLock();
