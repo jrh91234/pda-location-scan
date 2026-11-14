@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261114-1639'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261114-1641'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -202,8 +202,10 @@ function renderRecent() {
     return r.status === 'saved' && !isNaN(d) && d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) === t;
   }).length;
   if ($('count')) $('count').textContent = 'วันนี้บันทึก ' + savedToday + ' รายการ';
-  if (!S.recent.length) { el.innerHTML = '<div class="empty-list muted">ยังไม่มีรายการ</div>'; return; }
-  el.innerHTML = S.recent.slice(0, 60).map(function (r) {
+  // รายการที่ลบแล้วไม่ต้องแสดงในหน้าสแกน (ดูได้ที่หน้าประวัติ → แสดงรายการที่ลบแล้ว)
+  var shown = S.recent.filter(function (r) { return r.status !== 'deleted'; });
+  if (!shown.length) { el.innerHTML = '<div class="empty-list muted">ยังไม่มีรายการ</div>'; return; }
+  el.innerHTML = shown.slice(0, 60).map(function (r) {
     var extra = '';
     if (r.status === 'duplicate' && r.existing) {
       extra = '<div class="dup">QR นี้บันทึกแล้วที่ <b>' + esc(r.existing.location) + '</b> โดย ' + esc(r.existing.scanned_by) +
