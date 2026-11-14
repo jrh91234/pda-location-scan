@@ -77,15 +77,35 @@
       return h.map(function (b) { return b > 127 ? b - 256 : b; });
     },
     formatDate: function (d, tz, pattern) { return fmt(d, pattern); },
-    base64Decode: function () { return []; },
-    newBlob: function () { return {}; }
+    // ไบต์จำลอง: เก็บ base64 ไว้ตรงๆ (length ≈ ขนาดไฟล์)
+    base64Decode: function (s) { var o = { __b64: s, length: Math.floor(String(s).length * 3 / 4) }; return o; },
+    base64Encode: function (bytes) { return bytes && bytes.__b64 || ''; },
+    newBlob: function (bytes, mime, name) { return { bytes: bytes, mime: mime, name: name }; }
   };
   window.MimeType = { GOOGLE_DOCS: 'application/vnd.google-apps.document' };
+  // ไฟล์จำลองเก็บใน localStorage (gasmock_files)
+  var FKEY = 'gasmock_files';
+  function files() { try { return JSON.parse(localStorage.getItem(FKEY) || '{}'); } catch (e) { return {}; } }
+  function saveFiles(f) { localStorage.setItem(FKEY, JSON.stringify(f)); }
+  function fileObj(id) {
+    return {
+      getId: function () { return id; },
+      getUrl: function () { return 'https://drive.google.com/file/d/' + id + '/view'; },
+      setTrashed: function (t) { var f = files(); if (f[id]) { f[id].trashed = t; saveFiles(f); } },
+      getBlob: function () { var r = files()[id]; if (!r) throw new Error('mock: no file'); return { getContentType: function () { return r.mime; }, getBytes: function () { return { __b64: r.b64 }; } }; }
+    };
+  }
+  function folderObj(fid) {
+    return {
+      getId: function () { return fid; }, getName: function () { return 'PDA Scan Photos'; },
+      createFile: function (blob) { var id = 'mockfile-' + Math.random().toString(36).slice(2, 10); var f = files(); f[id] = { mime: blob.mime, name: blob.name, b64: blob.bytes.__b64 }; saveFiles(f); return fileObj(id); }
+    };
+  }
   window.DriveApp = {
-    createFolder: function () { return { getId: function () { return 'mock-folder'; } }; },
-    getFolderById: function () { return { createFile: function () { return { getUrl: function () { return 'https://drive.google.com/mock-file'; } }; } }; },
-    getRootFolder: function () { return this.getFolderById(); },
-    getFileById: function () { return { setTrashed: function () {} }; }
+    createFolder: function () { return folderObj('mock-folder'); },
+    getFolderById: function (id) { return folderObj(id); },
+    getRootFolder: function () { return folderObj('root'); },
+    getFileById: function (id) { if (!files()[id]) throw new Error('mock: no file ' + id); return fileObj(id); }
   };
   window.Drive = { Files: { insert: function () { return { id: 'mock-doc' }; } } };
   window.DocumentApp = { openById: function () { return { getBody: function () { return { getText: function () {

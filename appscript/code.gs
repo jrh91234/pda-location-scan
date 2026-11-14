@@ -15,7 +15,8 @@ const TZ = 'Asia/Bangkok';
 const MAX_BATCH = 50;
 
 // ======================= Web App =======================
-const API_ACTIONS = { ping: ping, saveScans: saveScans, listScans: listScans, deleteScan: deleteScan };
+const API_ACTIONS = { ping: ping, saveScans: saveScans, listScans: listScans, deleteScan: deleteScan,
+  uploadPhoto: uploadPhoto, getPhoto: getPhoto, deletePhoto: deletePhoto };
 
 function doPost(e) {
   let out;
@@ -45,7 +46,9 @@ function onOpen() {
 
 function setupFromMenu() {
   setup_();
-  SpreadsheetApp.getUi().alert('พร้อมใช้งาน: สร้างชีต "' + SHEET_NAME + '" แล้ว');
+  photoSheet_();
+  const folder = photoFolder_(); // ขอสิทธิ์ Google Drive สำหรับเก็บรูป
+  SpreadsheetApp.getUi().alert('พร้อมใช้งาน: ชีต "' + SHEET_NAME + '", "' + PHOTO_SHEET + '" และโฟลเดอร์รูป "' + folder.getName() + '"');
 }
 
 // ======================= ชีต =======================
@@ -178,6 +181,7 @@ function listScans(filter) {
   const q = clean_(filter.q, 80).toLowerCase();
   const date = clean_(filter.date, 10);
   const rows = readAll_(sheet_()).map(toClient_);
+  const photos = photosByScan_();
   const out = [];
   let total = 0;
   const locs = {}, parts = {};
@@ -193,7 +197,7 @@ function listScans(filter) {
       locs[r.location] = 1;
       parts[r.part_code] = 1;
     }
-    if (out.length < limit) out.push(r);
+    if (out.length < limit) { r.photos = photos[r.scan_id] || []; out.push(r); }
   }
   return { rows: out, total: total, partCount: Object.keys(parts).length, locationCount: Object.keys(locs).length };
 }
@@ -216,6 +220,123 @@ function deleteScan(scanId, deletedBy, reason) {
     sh.getRange(row._row, c, 1, 4).setValues([['deleted', by, now, clean_(reason, 200)]]);
     row.status = 'deleted'; row.deleted_by = by; row.deleted_at = now; row.delete_reason = clean_(reason, 200);
     return toClient_(row);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// ======================= รูปถ่าย =======================
+// เก็บไฟล์ใน Google Drive (โฟลเดอร์ส่วนตัว ไม่เปิดสาธารณะ) + บันทึกรายการในชีต Photos
+// หน้าเว็บโหลดรูปผ่าน getPhoto (Apps Script ส่ง base64 กลับ) จึงไม่ต้องแชร์ไฟล์
+const PHOTO_SHEET = 'Photos';
+const PHOTO_HEADERS = ['photo_id', 'scan_id', 'location', 'part_code', 'file_id', 'file_url', 'uploaded_at', 'uploaded_by',
+                       'status', 'deleted_by', 'deleted_at'];
+const PHOTO_TEXT_COLS = ['photo_id', 'scan_id', 'location', 'part_code', 'file_id', 'uploaded_by'];
+const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
+
+function photoSheet_() {
+  const ss = book_();
+  let sh = ss.getSheetByName(PHOTO_SHEET);
+  if (!sh) sh = ss.insertSheet(PHOTO_SHEET);
+  if (sh.getLastRow() === 0) {
+    sh.getRange(1, 1, 1, PHOTO_HEADERS.length).setValues([PHOTO_HEADERS]);
+    sh.setFrozenRows(1);
+    PHOTO_TEXT_COLS.forEach(function (col) {
+      sh.getRange(1, PHOTO_HEADERS.indexOf(col) + 1, sh.getMaxRows(), 1).setNumberFormat('@');
+    });
+  }
+  return sh;
+}
+
+function readPhotos_(sh) {
+  const n = sh.getLastRow() - 1;
+  if (n <= 0) return [];
+  return sh.getRange(2, 1, n, PHOTO_HEADERS.length).getValues().map(function (r, i) {
+    const o = { _row: i + 2 };
+    PHOTO_HEADERS.forEach(function (h, j) { o[h] = r[j]; });
+    return o;
+  });
+}
+
+function photosByScan_() {
+  const sh = book_().getSheetByName(PHOTO_SHEET);
+  const map = {};
+  if (!sh) return map;
+  readPhotos_(sh).forEach(function (p) {
+    if (String(p.status) === 'deleted') return;
+    (map[String(p.scan_id)] = map[String(p.scan_id)] || []).push(String(p.photo_id));
+  });
+  return map;
+}
+
+function photoFolder_() {
+  const props = PropertiesService.getScriptProperties();
+  const id = props.getProperty('PHOTO_FOLDER_ID');
+  if (id) {
+    try { return DriveApp.getFolderById(id); } catch (e) { /* โฟลเดอร์ถูกลบ → สร้างใหม่ */ }
+  }
+  const folder = DriveApp.createFolder('PDA Scan Photos');
+  props.setProperty('PHOTO_FOLDER_ID', folder.getId());
+  return folder;
+}
+
+/** p: { photo_id, scan_id, data (base64 ไม่มี prefix), mime, uploaded_by } — ส่งซ้ำได้ (photo_id เดิมจะไม่สร้างไฟล์ใหม่) */
+function uploadPhoto(p) {
+  p = p || {};
+  const id = clean_(p.photo_id, 64), scanId = clean_(p.scan_id, 64), by = clean_(p.uploaded_by, 60);
+  const mime = /^image\/(jpeg|png|webp)$/.test(String(p.mime)) ? String(p.mime) : 'image/jpeg';
+  if (!id || !scanId || !p.data) throw new Error('ข้อมูลรูปไม่ครบ');
+  const bytes = Utilities.base64Decode(String(p.data));
+  if (bytes.length > MAX_PHOTO_BYTES) throw new Error('รูปใหญ่เกิน 5MB');
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const sh = photoSheet_();
+    const existing = readPhotos_(sh).filter(function (r) { return String(r.photo_id) === id; })[0];
+    if (existing) return { photo_id: id, scan_id: String(existing.scan_id), result: 'exists' };
+
+    const scan = readAll_(sheet_()).filter(function (r) { return String(r.scan_id) === scanId; })[0];
+    const loc = scan ? String(scan.location) : '';
+    const part = scan ? String(scan.part_code) : '';
+    const now = new Date();
+    const name = [loc || 'NOLOC', (part || 'item').replace(/[\/:*?"<>|]/g, '_').slice(0, 40),
+                  Utilities.formatDate(now, TZ, 'yyyyMMdd-HHmmss'), id.slice(0, 6)].join('_') + (mime === 'image/png' ? '.png' : '.jpg');
+    const file = photoFolder_().createFile(Utilities.newBlob(bytes, mime, name));
+    const rec = { photo_id: id, scan_id: scanId, location: loc, part_code: part, file_id: file.getId(), file_url: file.getUrl(),
+                  uploaded_at: now, uploaded_by: by, status: 'active', deleted_by: '', deleted_at: '' };
+    sh.getRange(sh.getLastRow() + 1, 1, 1, PHOTO_HEADERS.length).setValues([PHOTO_HEADERS.map(function (h) { return rec[h]; })]);
+    return { photo_id: id, scan_id: scanId, result: 'saved' };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** คืนรูปเป็น data URL สำหรับแสดงในหน้าเว็บ */
+function getPhoto(photoId) {
+  const id = clean_(photoId, 64);
+  const sh = book_().getSheetByName(PHOTO_SHEET);
+  const row = sh && readPhotos_(sh).filter(function (r) { return String(r.photo_id) === id; })[0];
+  if (!row) throw new Error('ไม่พบรูป');
+  const blob = DriveApp.getFileById(String(row.file_id)).getBlob();
+  return { photo_id: id, data: 'data:' + blob.getContentType() + ';base64,' + Utilities.base64Encode(blob.getBytes()) };
+}
+
+/** ลบรูป: ทำเครื่องหมายในชีต + ย้ายไฟล์ไปถังขยะ Drive (กู้คืนได้ภายใน 30 วัน) */
+function deletePhoto(photoId, deletedBy) {
+  const id = clean_(photoId, 64), by = clean_(deletedBy, 60);
+  if (!by) throw new Error('กรุณาระบุชื่อผู้ลบ');
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const sh = photoSheet_();
+    const row = readPhotos_(sh).filter(function (r) { return String(r.photo_id) === id; })[0];
+    if (!row) throw new Error('ไม่พบรูป');
+    if (String(row.status) !== 'deleted') {
+      sh.getRange(row._row, PHOTO_HEADERS.indexOf('status') + 1, 1, 3).setValues([['deleted', by, new Date()]]);
+      try { DriveApp.getFileById(String(row.file_id)).setTrashed(true); } catch (e) { /* ไฟล์หายไปแล้ว */ }
+    }
+    return { photo_id: id, status: 'deleted' };
   } finally {
     lock.releaseLock();
   }
