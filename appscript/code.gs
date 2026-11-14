@@ -16,7 +16,7 @@ const TZ = 'Asia/Bangkok';
 const MAX_BATCH = 50;
 
 // ======================= Web App =======================
-const API_ACTIONS = { ping: ping, saveScans: saveScans, listScans: listScans, deleteScan: deleteScan, updateQty: updateQty, updateLocation: updateLocation,
+const API_ACTIONS = { ping: ping, saveScans: saveScans, listScans: listScans, deleteScan: deleteScan, updateQty: updateQty, updateLocation: updateLocation, findByQr: findByQr, getScans: getScans,
   uploadPhoto: uploadPhoto, getPhoto: getPhoto, deletePhoto: deletePhoto };
 
 function doPost(e) {
@@ -235,6 +235,25 @@ function listScans(filter) {
     if (out.length < limit) { r.photos = photos[r.scan_id] || []; out.push(r); }
   }
   return { rows: out, total: total, partCount: Object.keys(parts).length, locationCount: Object.keys(locs).length };
+}
+
+/** หารายการที่ยังใช้งานอยู่ของ QR นี้ (ใช้ตรวจซ้ำทันทีหลังสแกน ก่อนกดบันทึก) — ไม่พบ = null */
+function findByQr(qr) {
+  const chk = checkQr_(clean_(qr, 500));
+  if (!chk.text) return null;
+  const rows = readAll_(sheet_());
+  for (let i = rows.length - 1; i >= 0; i--) {
+    if (String(rows[i].qr_raw) === chk.text && String(rows[i].status) !== 'deleted') return toClient_(rows[i]);
+  }
+  return null;
+}
+
+/** ดึงสถานะล่าสุดของหลายรายการ (ให้หน้าสแกนในเครื่องตรงกับชีต: ลบ/ย้าย/แก้ยอดจากเครื่องอื่น) */
+function getScans(ids) {
+  if (!Array.isArray(ids) || !ids.length) return [];
+  const want = {};
+  ids.slice(0, 500).forEach(function (id) { want[clean_(id, 64)] = 1; });
+  return readAll_(sheet_()).filter(function (r) { return want[String(r.scan_id)]; }).map(toClient_);
 }
 
 /**

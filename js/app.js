@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261114-1704'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261114-1727'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -93,7 +93,7 @@ function render() {
   $('btnUser').onclick = openUserModal;
   $('btnSettings').onclick = openSettings;
   Array.prototype.forEach.call(document.querySelectorAll('.tabs button'), function (b) {
-    b.onclick = function () { S.view = b.getAttribute('data-view'); render(); };
+    b.onclick = function () { S.view = b.getAttribute('data-view'); render(); if (S.view !== 'history') syncRecent(); };
   });
   if (S.view === 'scan') renderScan(); else if (S.view === 'manual') renderManual(); else renderHistory();
 }
@@ -214,6 +214,7 @@ function renderRecent() {
       extra = '<div class="dup">QR นี้บันทึกแล้วที่ <b>' + esc(r.existing.location) + '</b> โดย ' + esc(r.existing.scanned_by) +
         ' (' + esc(r.existing.scanned_at) + ')' +
         (r.existing.location !== r.location ? '<button class="btn small warn" data-move="' + esc(r.scan_id) + '">ย้ายมาที่ ' + esc(r.location) + '</button>' : '') +
+        '<button class="btn small" data-dropdup="' + esc(r.scan_id) + '">ยกเลิก</button>' +
         '</div>';
     } else if (r.status === 'error' && r.error) {
       extra = '<div class="dup">' + esc(r.error) + '</div>';
@@ -242,6 +243,9 @@ function renderRecent() {
   });
   Array.prototype.forEach.call(el.querySelectorAll('[data-move]'), function (b) {
     b.onclick = function () { moveDuplicate(b.getAttribute('data-move')); };
+  });
+  Array.prototype.forEach.call(el.querySelectorAll('[data-dropdup]'), function (b) {
+    b.onclick = function () { dropLocal(b.getAttribute('data-dropdup')); };
   });
   bindPhotoButtons(el, function () { return null; });
   Array.prototype.forEach.call(el.querySelectorAll('[data-qty]'), function (b) {
@@ -280,17 +284,13 @@ function handleScan(raw) {
 
   var p = parseQr(text);
   var replaced = S.draft && S.draft.qr_raw !== p.qr_raw ? S.draft : null;
-  var dup = findSavedDuplicate(p.qr_raw);
   setDraft({
     qr_raw: p.qr_raw, part_code: p.part_code, lot_no: p.lot_no, qty: p.qty, unit: p.unit, pkg_ref: p.pkg_ref,
-    scanned_at: new Date().toISOString()
+    scanned_at: new Date().toISOString(), dupChecked: false, dup: null
   });
-  if (dup) {
-    beep(false);
-    setMsg('err', '⚠ QR นี้บันทึกแล้วที่ <b>' + esc(dup.location) + '</b> เวลา ' + hhmm(dup.scanned_at) +
-      '<br>ถ้าต้องการย้าย ให้ลบรายการเดิมก่อน');
-    return;
-  }
+  checkDraftDup();
+  var dup = draftDup(S.draft);
+  if (dup) { beep(false); setMsg('err', dupMsg(dup)); return; }
   beep(true);
   setMsg('warn', (chk.fixed ? 'อ่านค่าซ้ำ 2 รอบในครั้งเดียว ระบบตัดให้เหลือ 1 แล้ว · ' : '') +
     (replaced ? 'แทนที่รายการก่อนหน้า (' + esc(replaced.part_code) + ') · ' : '') +
@@ -310,7 +310,8 @@ function renderDraft() {
   var el = $('draft'); if (!el) return;
   var d = S.draft;
   if (!d) { el.innerHTML = ''; return; }
-  var dup = findSavedDuplicate(d.qr_raw);
+  var dup = draftDup(d);
+  var checking = !d.dupChecked && !!apiUrl() && !dup;
   el.innerHTML = '<section class="draft-card' + (dup ? ' bad' : '') + '">' +
     '<div class="draft-head"><span>สแกนแล้ว · ยังไม่บันทึก</span><button class="link" id="dCancel">ยกเลิก</button></div>' +
     '<div class="draft-part">' + esc(d.part_code || d.qr_raw) + '</div>' +
@@ -319,11 +320,23 @@ function renderDraft() {
       '<button class="qty-btn" id="dQty">' + (d.qty !== '' ? esc(fmtQty(d.qty, d.unit)) : 'ใส่ยอด') + ' ✏️</button>' +
       (d.pkg_ref ? '<span class="muted">Pkg ' + esc(d.pkg_ref) + '</span>' : '') +
     '</div>' +
-    (S.location
-      ? '<button class="btn primary save-btn" id="dSave"' + (dup ? ' disabled' : '') + '>💾 บันทึก → ' + esc(S.location) + '</button>'
-      : '<button class="btn warn save-btn" id="dPickLoc">📍 เลือก Location ก่อนบันทึก</button>') +
+    (dup
+      ? '<div class="dup-box">⚠ QR นี้บันทึกแล้วที่ <b>' + esc(dup.location) + '</b>' +
+          '<div class="small">' + (dup.status === 'pending' ? 'รายการรอส่งในเครื่องนี้' : esc(dup.scanned_by || '') + (dup.scanned_at ? ' · ' + esc(String(dup.scanned_at).replace('T', ' ').slice(0, 16)) : '')) + '</div></div>' +
+        '<div class="actions dup-actions">' +
+          (!S.location ? '<button class="btn warn" id="dPickLoc">📍 เลือก Location เพื่อย้าย</button>'
+            : dup.location !== S.location ? '<button class="btn warn" id="dMove">📍 ย้ายมาที่ ' + esc(S.location) + '</button>'
+            : '<span class="muted small">อยู่ที่ Location นี้อยู่แล้ว</span>') +
+          '<button class="btn" id="dCancel2">ยกเลิก</button>' +
+        '</div>'
+      : (S.location
+        ? '<button class="btn primary save-btn" id="dSave">💾 บันทึก → ' + esc(S.location) + '</button>'
+        : '<button class="btn warn save-btn" id="dPickLoc">📍 เลือก Location ก่อนบันทึก</button>') +
+        (checking ? '<div class="muted small center">กำลังตรวจซ้ำกับระบบ…</div>' : '')) +
   '</section>';
   $('dCancel').onclick = function () { setDraft(null); setMsg('idle', 'ยกเลิกแล้ว — สแกนรายการใหม่ได้เลย'); focusScan(); };
+  if ($('dCancel2')) $('dCancel2').onclick = $('dCancel').onclick;
+  if ($('dMove')) $('dMove').onclick = moveDraftDup;
   if ($('dSave')) $('dSave').onclick = saveDraft;
   $('dQty').onclick = editDraftQty;
   if ($('dPickLoc')) $('dPickLoc').onclick = openLocationPicker;
@@ -333,8 +346,8 @@ function saveDraft() {
   var d = S.draft; if (!d) return;
   if (!S.user) { beep(false); setMsg('err', 'กรุณาใส่ชื่อผู้สแกนก่อน'); openUserModal(); return; }
   if (!S.location) { beep(false); openLocationPicker(); return; }
-  var dup = findSavedDuplicate(d.qr_raw);
-  if (dup) { beep(false); setMsg('err', '⚠ QR นี้บันทึกแล้วที่ <b>' + esc(dup.location) + '</b>'); return; }
+  var dup = draftDup(d);
+  if (dup) { beep(false); setMsg('err', dupMsg(dup)); return; }
   var item = {
     scan_id: uid(), scanned_at: d.scanned_at || new Date().toISOString(), location: S.location,
     qr_raw: d.qr_raw, part_code: d.part_code, lot_no: d.lot_no, qty: d.qty, unit: d.unit, pkg_ref: d.pkg_ref,
@@ -579,6 +592,131 @@ function editHistoryLocation(row) {
   });
 }
 
+// ---------- ตรวจซ้ำกับ cloud + ซิงก์รายการในเครื่อง ----------
+// หน้าสแกนเก็บรายการล่าสุดไว้ในเครื่อง แต่สถานะจริงอยู่ในชีต: เครื่องอื่นอาจลบ/ย้าย/แก้ยอดไปแล้ว
+// → ตรวจ QR กับชีตทันทีหลังสแกน และดึงสถานะล่าสุดของรายการในเครื่องเป็นระยะ
+
+// รายการซ้ำของ draft: รายการ "รอส่ง" ในเครื่องมาก่อน (ยังไม่ถึงชีต) → ผลจากชีต → (ยังไม่ได้เช็ค) รายการในเครื่อง
+function draftDup(d) {
+  if (!d) return null;
+  var localPending = S.recent.filter(function (r) { return r.qr_raw === d.qr_raw && r.status === 'pending'; })[0];
+  if (localPending) return localPending;
+  if (d.dupChecked) return d.dup || null;
+  return findSavedDuplicate(d.qr_raw) || null;
+}
+
+function dupMsg(dup) {
+  return '⚠ QR นี้บันทึกแล้วที่ <b>' + esc(dup.location) + '</b>' +
+    (dup.scanned_by ? ' โดย ' + esc(dup.scanned_by) : '') +
+    (S.location && dup.location !== S.location ? ' — กด <b>ย้ายมาที่ ' + esc(S.location) + '</b> หรือ <b>ยกเลิก</b>' : ' — กด <b>ยกเลิก</b>');
+}
+
+var SYNC_FIELDS = ['location', 'location_original', 'qty', 'unit', 'qty_original', 'part_code', 'lot_no', 'pkg_ref',
+                   'edited_by', 'edited_at', 'deleted_by', 'deleted_at', 'delete_reason'];
+
+// อัปเดตรายการในเครื่องจากข้อมูลในชีต — คืน true ถ้ามีอะไรเปลี่ยน
+function upsertRecent(rec, addIfMissing) {
+  if (!rec || !rec.scan_id) return false;
+  var st = rec.status === 'deleted' ? 'deleted' : 'saved';
+  var r = findRecent(rec.scan_id);
+  if (!r) {
+    if (!addIfMissing) return false;
+    var item = { status: st, photos: (rec.photos || []).slice() };
+    ['scan_id', 'scanned_at', 'qr_raw', 'scanned_by', 'device'].concat(SYNC_FIELDS).forEach(function (k) { item[k] = rec[k] == null ? '' : rec[k]; });
+    S.recent.unshift(item);
+    return true;
+  }
+  if (r.status !== 'saved' && r.status !== 'deleted') return false; // รอส่ง/ซ้ำ/ผิดพลาด = สถานะของเครื่อง
+  var changed = r.status !== st;
+  r.status = st;
+  SYNC_FIELDS.forEach(function (k) {
+    if (rec[k] === undefined) return;
+    if (String(r[k] == null ? '' : r[k]) !== String(rec[k])) { r[k] = rec[k]; changed = true; }
+  });
+  return changed;
+}
+
+function syncRecent() {
+  if (S.recentSyncing || !apiUrl()) return;
+  var ids = S.recent.filter(function (r) { return r.status === 'saved'; }).map(function (r) { return r.scan_id; }).slice(0, 300);
+  if (!ids.length) return;
+  S.recentSyncing = true;
+  api('getScans', ids).then(function (list) {
+    S.online = true; S.recentSyncing = false;
+    var changed = false;
+    list.forEach(function (rec) { if (upsertRecent(rec, false)) changed = true; });
+    if (changed) { saveRecent(); refreshScanParts(); renderDraft(); }
+  }, function (err) { S.recentSyncing = false; if (err.network) S.online = false; });
+}
+
+function checkDraftDup() {
+  var d = S.draft; if (!d || !apiUrl()) return;
+  var qr = d.qr_raw;
+  api('findByQr', qr).then(function (rec) {
+    S.online = true;
+    var shown = S.draft && S.draft.qr_raw === qr ? draftDup(S.draft) : null;
+    var shownLoc = shown ? shown.location : null; // ค่าที่แสดงไปก่อนเช็ค (ก่อนอัปเดตข้อมูลในเครื่อง)
+    if (rec && upsertRecent(rec, false)) saveRecent();
+    // รายการในเครื่องที่ชีตบอกว่าไม่ได้ใช้งานแล้ว (ถูกลบ/แทนที่) → ซิงก์ใหม่
+    if (S.recent.some(function (r) { return r.qr_raw === qr && r.status === 'saved' && (!rec || r.scan_id !== rec.scan_id); })) syncRecent();
+    if (!S.draft || S.draft.qr_raw !== qr) return;
+    S.draft.dupChecked = true; S.draft.dup = rec || null; storeJson('pda_draft', S.draft);
+    var after = draftDup(S.draft);
+    renderDraft(); refreshScanParts();
+    if (after && after.location !== shownLoc) { beep(false); setMsg('err', dupMsg(after)); }
+    else if (!after && shownLoc) { beep(true); setMsg('warn', 'ตรวจกับระบบแล้ว ไม่ซ้ำ — กด <b>บันทึก</b>'); }
+  }, function (err) { if (err.network) S.online = false; });
+}
+
+// ย้ายรายการเดิม (ที่ซ้ำ) มาที่ Location ปัจจุบัน — แก้ Location ของรายการเดิม ไม่สร้างรายการใหม่
+function moveDraftDup() {
+  var d = S.draft, dup = draftDup(d), target = S.location;
+  if (!d || !dup || !target) return;
+  if (!S.user) { openUserModal(); return; }
+  if (dup.status === 'pending') {
+    if (S.syncing) { toast('กำลังส่งข้อมูล รอสักครู่แล้วลองใหม่'); return; }
+    dup.location = target; saveRecent(); setDraft(null);
+    setMsg('ok', '✔ ย้าย <b>' + esc(dup.part_code) + '</b> → <b>' + esc(target) + '</b>');
+    refreshScanParts(); focusScan();
+    return;
+  }
+  confirmMoveModal(dup, target, function (note) {
+    return api('updateLocation', dup.scan_id, target, S.user, note).then(function (rec) {
+      upsertRecent(rec, true); applyServerLocation(rec); saveRecent();
+      setDraft(null);
+      beep(true);
+      setMsg('ok', '✔ ย้าย <b>' + esc(rec.part_code) + '</b> จาก ' + esc(dup.location) + ' → <b>' + esc(rec.location) + '</b>', rec.scan_id);
+      refreshScanParts();
+    });
+  });
+}
+
+// รายการที่เซิร์ฟเวอร์ตอบว่าซ้ำหลังส่ง (เช่น ส่งตอนออฟไลน์) → ย้ายรายการเดิม / ยกเลิก
+function moveDuplicate(id) {
+  var r = findRecent(id); if (!r || !r.existing) return;
+  if (!S.user) { openUserModal(); return; }
+  confirmMoveModal(r.existing, r.location, function (note) {
+    return api('updateLocation', r.existing.scan_id, r.location, S.user, note).then(function (rec) {
+      upsertRecent(rec, true); applyServerLocation(rec);
+      var keep = findRecent(rec.scan_id);
+      // ย้ายรูปที่แนบกับรายการซ้ำไปไว้กับรายการเดิม
+      (r.photos || []).forEach(function (pid) { if (keep && keep.photos.indexOf(pid) < 0) keep.photos.push(pid); });
+      S.photoQueue.forEach(function (q) { if (q.scan_id === r.scan_id) q.scan_id = rec.scan_id; });
+      storeJson('pda_photo_queue', S.photoQueue);
+      S.recent = S.recent.filter(function (x) { return x.scan_id !== r.scan_id; });
+      saveRecent(); refreshScanParts(); flushPhotos();
+    });
+  });
+}
+
+function dropLocal(id) {
+  S.recent = S.recent.filter(function (x) { return x.scan_id !== id; });
+  S.photoQueue.filter(function (q) { return q.scan_id === id; }).forEach(function (q) { PhotoStore.del(q.photo_id); });
+  S.photoQueue = S.photoQueue.filter(function (q) { return q.scan_id !== id; });
+  storeJson('pda_photo_queue', S.photoQueue);
+  saveRecent(); refreshScanParts(); toast('ยกเลิกแล้ว');
+}
+
 // ---------- ลบ ----------
 function deleteRecent(id) {
   var r = findRecent(id); if (!r) return;
@@ -595,18 +733,6 @@ function deleteRecent(id) {
     S.photoQueue = S.photoQueue.filter(function (q) { return q.scan_id !== id; });
     storeJson('pda_photo_queue', S.photoQueue);
     saveRecent(); refreshScanParts(); toast('ลบออกแล้ว');
-  });
-}
-
-function moveDuplicate(id) {
-  var r = findRecent(id); if (!r || !r.existing) return;
-  confirmModal('ย้าย Location?', 'ลบรายการเดิมที่ <b>' + esc(r.existing.location) + '</b> แล้วบันทึกใหม่ที่ <b>' + esc(r.location) + '</b>', 'ย้าย', function () {
-    api('deleteScan', r.existing.scan_id, S.user, 'ย้าย Location → ' + r.location).then(function () {
-      var old = findRecent(r.existing.scan_id); if (old) old.status = 'deleted';
-      r.status = 'pending'; delete r.existing;
-      saveRecent(); refreshScanParts(); flush();
-      toast('ย้ายแล้ว');
-    }, function (err) { toast(err.message, 3500); });
   });
 }
 
@@ -1288,6 +1414,9 @@ function deletePhotoUi(id, scanId, row) {
   setInterval(function () { flush(); flushPhotos(); }, 8000);
   flush(); flushPhotos();
   setInterval(checkUpdate, 60000);
+  setInterval(syncRecent, 60000);
+  setTimeout(syncRecent, 1500);
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) syncRecent(); });
   document.addEventListener('visibilitychange', function () { if (!document.hidden) checkUpdate(); });
   setTimeout(checkUpdate, 3000);
 })();
