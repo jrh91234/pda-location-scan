@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261114-1631'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261114-1639'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -221,7 +221,7 @@ function renderRecent() {
         '<div class="row-sub">' +
           '<span class="loc-pill">' + esc(r.location) + '</span>' +
           (r.lot_no ? '<span>Lot ' + esc(r.lot_no) + '</span>' : '') +
-          (r.qty !== '' ? '<span>' + esc(fmtQty(r.qty, r.unit)) + '</span>' : '') +
+          qtyChip(r, r.status === 'pending' || r.status === 'saved', 'data-qty') +
           '<span class="muted">' + hhmm(r.scanned_at) + '</span>' +
           photoChip(r.scan_id, null) +
         '</div>' + extra +
@@ -239,6 +239,9 @@ function renderRecent() {
     b.onclick = function () { moveDuplicate(b.getAttribute('data-move')); };
   });
   bindPhotoButtons(el, function () { return null; });
+  Array.prototype.forEach.call(el.querySelectorAll('[data-qty]'), function (b) {
+    b.onclick = function () { editRecentQty(b.getAttribute('data-qty')); };
+  });
 }
 
 function refreshScanParts() { if (S.view === 'scan') { renderSync(); renderRecent(); } else refreshHeader(); }
@@ -305,7 +308,7 @@ function renderDraft() {
     '<div class="draft-part">' + esc(d.part_code || d.qr_raw) + '</div>' +
     '<div class="row-sub">' +
       (d.lot_no ? '<span>Lot ' + esc(d.lot_no) + '</span>' : '') +
-      (d.qty !== '' ? '<span><b>' + esc(fmtQty(d.qty, d.unit)) + '</b></span>' : '') +
+      '<button class="qty-btn" id="dQty">' + (d.qty !== '' ? esc(fmtQty(d.qty, d.unit)) : 'ใส่ยอด') + ' ✏️</button>' +
       (d.pkg_ref ? '<span class="muted">Pkg ' + esc(d.pkg_ref) + '</span>' : '') +
     '</div>' +
     (S.location
@@ -314,6 +317,7 @@ function renderDraft() {
   '</section>';
   $('dCancel').onclick = function () { setDraft(null); setMsg('idle', 'ยกเลิกแล้ว — สแกนรายการใหม่ได้เลย'); focusScan(); };
   if ($('dSave')) $('dSave').onclick = saveDraft;
+  $('dQty').onclick = editDraftQty;
   if ($('dPickLoc')) $('dPickLoc').onclick = openLocationPicker;
 }
 
@@ -382,6 +386,114 @@ function flush(manual) {
 }
 
 function findRecent(id) { return S.recent.filter(function (r) { return r.scan_id === id; })[0]; }
+
+// ---------- แก้ยอด ----------
+// ก่อนบันทึก (draft / รอส่ง) แก้ในเครื่องได้เลย · หลังบันทึก ส่งไปเซิร์ฟเวอร์พร้อมเหตุผล (เก็บยอดเดิมไว้ตรวจสอบ)
+var QTY_REASONS = ['นับจริงไม่ตรงป้าย', 'ป้ายพิมพ์ยอดผิด', 'เบิก/แบ่งออกไปบางส่วน', 'อื่นๆ'];
+
+function qtyChip(r, editable, attr) {
+  var label = r.qty !== '' && r.qty != null ? esc(fmtQty(r.qty, r.unit)) : (editable ? '+ ใส่ยอด' : '');
+  var edited = r.edited_by && r.qty_original !== '' && r.qty_original != null
+    ? '<span class="muted small">(เดิม ' + esc(fmtQty(r.qty_original, r.unit)) + ')</span>' : '';
+  if (!label) return edited;
+  return (editable ? '<button class="qty-btn small" ' + attr + '="' + esc(r.scan_id) + '">' + label + ' ✏️</button>' : '<span>' + label + '</span>') + edited;
+}
+
+function parseQtyInput(v) {
+  var s = String(v || '').replace(/,/g, '').trim();
+  if (s === '' || isNaN(Number(s)) || Number(s) < 0) return null;
+  return Number(s);
+}
+
+// opts: { rec, needReason, onSave(qty, note) → Promise|void }
+function openQtyModal(opts) {
+  var rec = opts.rec;
+  var cur = rec.qty !== '' && rec.qty != null ? String(rec.qty) : '';
+  openModal('<h3>แก้ยอด</h3>' +
+    '<div class="card-lite"><b>' + esc(rec.part_code || rec.qr_raw) + '</b>' +
+      (rec.lot_no ? '<br>Lot ' + esc(rec.lot_no) : '') +
+      (rec.location ? '<br>Location <b>' + esc(rec.location) + '</b>' : '') +
+      (cur !== '' ? '<br><span class="muted">ยอดปัจจุบัน ' + esc(fmtQty(rec.qty, rec.unit)) + '</span>' : '') + '</div>' +
+    '<label>ยอดใหม่' + (rec.unit ? ' (' + esc(rec.unit) + ')' : '') + '</label>' +
+    '<div class="qty-edit"><button class="btn" id="qMinus">−</button>' +
+      '<input id="qIn" class="field big" inputmode="decimal" autocomplete="off" value="' + esc(cur) + '">' +
+      '<button class="btn" id="qPlus">+</button></div>' +
+    (opts.needReason
+      ? '<label>เหตุผล</label><div class="reasons">' +
+        QTY_REASONS.map(function (x, i) { return '<label class="radio"><input type="radio" name="qreason" value="' + esc(x) + '"' + (i === 0 ? ' checked' : '') + '> ' + esc(x) + '</label>'; }).join('') +
+        '</div><input id="qOther" class="field hidden" placeholder="ระบุเหตุผล">' +
+        '<p class="muted small">ระบบเก็บยอดเดิม ผู้แก้ไข และเวลาไว้ในชีตเพื่อตรวจสอบย้อนหลัง</p>'
+      : '') +
+    '<div class="actions"><button class="btn" id="mCancel">ยกเลิก</button><button class="btn primary" id="mOk">บันทึกยอด</button></div>');
+  var inp = $('qIn');
+  setTimeout(function () { inp.focus(); inp.select(); }, 50);
+  function step(d) { var n = parseQtyInput(inp.value) || 0; inp.value = String(Math.max(0, Math.round((n + d) * 1000) / 1000)); }
+  $('qMinus').onclick = function () { step(-1); };
+  $('qPlus').onclick = function () { step(1); };
+  inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); $('mOk').click(); } });
+  Array.prototype.forEach.call(document.querySelectorAll('input[name=qreason]'), function (x) {
+    x.onchange = function () { $('qOther').classList.toggle('hidden', x.value !== 'อื่นๆ' || !x.checked); };
+  });
+  $('mCancel').onclick = closeModal;
+  $('mOk').onclick = function () {
+    var q = parseQtyInput(inp.value);
+    if (q === null) { toast('กรุณาใส่ยอดเป็นตัวเลข'); inp.focus(); return; }
+    var note = '';
+    if (opts.needReason) {
+      note = document.querySelector('input[name=qreason]:checked').value;
+      if (note === 'อื่นๆ') { note = $('qOther').value.trim(); if (!note) { toast('กรุณาระบุเหตุผล'); return; } }
+    }
+    if (cur !== '' && q === Number(cur)) { closeModal(); return; }
+    var btn = $('mOk');
+    var p = opts.onSave(q, note);
+    if (!p || !p.then) { closeModal(); return; }
+    btn.disabled = true; btn.textContent = 'กำลังบันทึก…';
+    p.then(function () { closeModal(); toast('แก้ยอดแล้ว'); },
+      function (err) { btn.disabled = false; btn.textContent = 'บันทึกยอด'; toast(err.message, 3500); });
+  };
+}
+
+function unitFor(q, u) { return u || (Math.floor(q) === q ? 'EA' : 'kg'); }
+
+function editDraftQty() {
+  var d = S.draft; if (!d) return;
+  openQtyModal({ rec: d, onSave: function (q) {
+    d.qty = q; d.unit = unitFor(q, d.unit); setDraft(d);
+    setMsg('warn', 'แก้ยอดเป็น <b>' + esc(fmtQty(q, d.unit)) + '</b> แล้ว — กด <b>บันทึก</b> เพื่อยืนยัน');
+  } });
+}
+
+function applyServerQty(rec) {
+  var r = findRecent(rec.scan_id);
+  if (r) { r.qty = rec.qty; r.unit = rec.unit; r.qty_original = rec.qty_original; r.edited_by = rec.edited_by; r.edited_at = rec.edited_at; saveRecent(); }
+  var rows = S.hist.data && S.hist.data.rows;
+  if (rows) rows.forEach(function (x) { if (x.scan_id === rec.scan_id) Object.assign(x, rec, { photos: x.photos }); });
+}
+
+function editRecentQty(id) {
+  var r = findRecent(id); if (!r) return;
+  if (r.status === 'pending') {
+    if (S.syncing) { toast('กำลังส่งข้อมูล รอสักครู่แล้วลองใหม่'); return; }
+    openQtyModal({ rec: r, onSave: function (q) {
+      if (r.status !== 'pending') { toast('รายการนี้ส่งไปแล้ว กรุณาแก้อีกครั้ง'); return; }
+      r.qty = q; r.unit = unitFor(q, r.unit); saveRecent(); refreshScanParts();
+    } });
+    return;
+  }
+  if (r.status !== 'saved') return;
+  if (!S.user) { openUserModal(); return; }
+  openQtyModal({ rec: r, needReason: true, onSave: function (q, note) {
+    return api('updateQty', r.scan_id, q, S.user, note).then(function (rec) { applyServerQty(rec); refreshScanParts(); });
+  } });
+}
+
+function editHistoryQty(row) {
+  if (!row || row.status === 'deleted') return;
+  if (!S.user) { openUserModal(); return; }
+  openQtyModal({ rec: row, needReason: true, onSave: function (q, note) {
+    return api('updateQty', row.scan_id, q, S.user, note).then(function (rec) { applyServerQty(rec); renderHistoryList(); });
+  } });
+}
 
 // ---------- ลบ ----------
 function deleteRecent(id) {
@@ -493,7 +605,7 @@ function renderHistoryList() {
           '<div class="row-top"><b class="part">' + esc(r.part_code || r.qr_raw) + '</b>' + (del ? '<span class="tag deleted">ลบแล้ว</span>' : '') + '</div>' +
           '<div class="row-sub"><span class="loc-pill">' + esc(r.location) + '</span>' +
             (r.lot_no ? '<span>Lot ' + esc(r.lot_no) + '</span>' : '') +
-            (r.qty !== '' ? '<span>' + esc(fmtQty(r.qty, r.unit)) + '</span>' : '') + photoChip(r.scan_id, r) + '</div>' +
+            qtyChip(r, !del, 'data-hqty') + photoChip(r.scan_id, r) + '</div>' +
           '<div class="row-sub muted"><span>' + esc(r.scanned_by) + '</span><span>' + esc(r.scanned_at) + '</span></div>' +
           (del ? '<div class="row-sub muted small">ลบโดย ' + esc(r.deleted_by) + ' · ' + esc(r.deleted_at) + ' · ' + esc(r.delete_reason) + '</div>' : '') +
         '</div>' +
@@ -502,6 +614,9 @@ function renderHistoryList() {
       '</div>';
     }).join('');
   bindPhotoButtons(el, function (id) { return d.rows.filter(function (x) { return x.scan_id === id; })[0] || null; });
+  Array.prototype.forEach.call(el.querySelectorAll('[data-hqty]'), function (b) {
+    b.onclick = function () { editHistoryQty(d.rows.filter(function (x) { return x.scan_id === b.getAttribute('data-hqty'); })[0]); };
+  });
   Array.prototype.forEach.call(el.querySelectorAll('[data-hdel]'), function (b) {
     b.onclick = function () {
       var id = b.getAttribute('data-hdel');

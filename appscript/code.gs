@@ -8,14 +8,15 @@
 // ======================= ค่าคงที่ =======================
 const SHEET_NAME = 'Scans';
 const HEADERS = ['scan_id', 'scanned_at', 'saved_at', 'location', 'qr_raw', 'part_code', 'lot_no', 'qty', 'unit',
-                 'pkg_ref', 'scanned_by', 'device', 'status', 'deleted_by', 'deleted_at', 'delete_reason'];
+                 'pkg_ref', 'scanned_by', 'device', 'status', 'deleted_by', 'deleted_at', 'delete_reason',
+                 'qty_original', 'edited_by', 'edited_at', 'edit_note'];
 // คอลัมน์ที่ต้องเก็บเป็นข้อความ (กันเลข 0 นำหน้าหาย / กัน Sheets แปลงเป็นวันที่หรือตัวเลข)
 const TEXT_COLS = ['scan_id', 'location', 'qr_raw', 'part_code', 'lot_no', 'pkg_ref', 'scanned_by', 'device'];
 const TZ = 'Asia/Bangkok';
 const MAX_BATCH = 50;
 
 // ======================= Web App =======================
-const API_ACTIONS = { ping: ping, saveScans: saveScans, listScans: listScans, deleteScan: deleteScan,
+const API_ACTIONS = { ping: ping, saveScans: saveScans, listScans: listScans, deleteScan: deleteScan, updateQty: updateQty,
   uploadPhoto: uploadPhoto, getPhoto: getPhoto, deletePhoto: deletePhoto };
 
 function doPost(e) {
@@ -73,7 +74,10 @@ function setup_() {
 
 function sheet_() {
   const sh = book_().getSheetByName(SHEET_NAME);
-  return sh && sh.getLastRow() > 0 ? sh : setup_();
+  if (!sh || sh.getLastRow() === 0) return setup_();
+  // ชีตที่สร้างจากเวอร์ชันเก่า: เติมหัวคอลัมน์ใหม่ต่อท้าย
+  if (sh.getLastColumn() < HEADERS.length) sh.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
+  return sh;
 }
 
 function readAll_(sh) {
@@ -97,7 +101,9 @@ function toClient_(o) {
     lot_no: String(o.lot_no), qty: o.qty === '' ? '' : Number(o.qty), unit: String(o.unit),
     pkg_ref: String(o.pkg_ref), scanned_by: String(o.scanned_by), device: String(o.device),
     status: String(o.status || 'active'), deleted_by: String(o.deleted_by || ''),
-    deleted_at: fmt_(o.deleted_at), delete_reason: String(o.delete_reason || '')
+    deleted_at: fmt_(o.deleted_at), delete_reason: String(o.delete_reason || ''),
+    qty_original: o.qty_original === '' || o.qty_original == null ? '' : Number(o.qty_original),
+    edited_by: String(o.edited_by || ''), edited_at: fmt_(o.edited_at), edit_note: String(o.edit_note || '')
   };
 }
 
@@ -180,7 +186,8 @@ function saveScans(items) {
         location: loc, qr_raw: qr, part_code: clean_(it.part_code, 80), lot_no: clean_(it.lot_no, 80),
         qty: qty, unit: clean_(it.unit, 10), pkg_ref: clean_(it.pkg_ref, 80),
         scanned_by: clean_(it.scanned_by, 60), device: clean_(it.device, 60),
-        status: 'active', deleted_by: '', deleted_at: '', delete_reason: ''
+        status: 'active', deleted_by: '', deleted_at: '', delete_reason: '',
+        qty_original: '', edited_by: '', edited_at: '', edit_note: ''
       };
       toAppend.push(HEADERS.map(function (h) { return rec[h]; }));
       byId[id] = rec;
@@ -227,6 +234,34 @@ function listScans(filter) {
     if (out.length < limit) { r.photos = photos[r.scan_id] || []; out.push(r); }
   }
   return { rows: out, total: total, partCount: Object.keys(parts).length, locationCount: Object.keys(locs).length };
+}
+
+/**
+ * แก้ยอดหลังบันทึก — เก็บยอดเดิมครั้งแรกไว้ใน qty_original + ใคร/เมื่อไร/เหตุผล
+ */
+function updateQty(scanId, qty, editedBy, note) {
+  const id = clean_(scanId, 64), by = clean_(editedBy, 60);
+  const n = Number(String(qty).replace(/,/g, ''));
+  if (!id) throw new Error('ไม่พบรหัสรายการ');
+  if (!by) throw new Error('กรุณาระบุชื่อผู้แก้ไข');
+  if (String(qty).trim() === '' || isNaN(n) || n < 0) throw new Error('ยอดไม่ถูกต้อง');
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const sh = sheet_();
+    const row = readAll_(sh).filter(function (r) { return String(r.scan_id) === id; })[0];
+    if (!row) throw new Error('ไม่พบรายการนี้ในระบบ');
+    if (String(row.status) === 'deleted') throw new Error('รายการนี้ถูกลบแล้ว แก้ยอดไม่ได้');
+    const now = new Date();
+    const orig = row.qty_original === '' || row.qty_original == null ? row.qty : row.qty_original;
+    row.qty = n; row.qty_original = orig; row.edited_by = by; row.edited_at = now; row.edit_note = clean_(note, 200);
+    sh.getRange(row._row, HEADERS.indexOf('qty') + 1).setValue(n);
+    const c = HEADERS.indexOf('qty_original') + 1;
+    sh.getRange(row._row, c, 1, 4).setValues([[orig, by, now, row.edit_note]]);
+    return toClient_(row);
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 /** ลบแบบ soft delete — แถวยังอยู่ในชีต (status = deleted) เพื่อให้ตรวจสอบย้อนหลังได้ */
