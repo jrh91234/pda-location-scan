@@ -162,3 +162,7 @@ button.loc-pill { border: 1px solid var(--blue); font-family: inherit; font-size
 .dup-box { margin-top: 10px; background: var(--red-soft); color: var(--red); border-radius: 10px; padding: 10px; font-size: 16px; }
 .dup-actions { margin-top: 10px; justify-content: stretch; }
 .dup-actions .btn { flex: 1; padding: 12px; font-size: 16px; }
+
+/* ---------- จบงาน ---------- */
+.sep { border: 0; border-top: 1px solid var(--line); margin: 16px 0 12px; }
+.logout-btn { width: 100%; padding: 14px; font-size: 17px; }

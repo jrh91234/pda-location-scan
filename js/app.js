@@ -1,13 +1,13 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261114-1727'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261114-1743'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
 var S = {
   view: 'scan',
-  user: store('pda_user') || '',
+  user: validName(store('pda_user')) ? store('pda_user') : '', // ชื่อ "0" ฯลฯ ที่ตั้งไว้กันแอบอ้าง = ถือว่ายังไม่มีชื่อ
   device: store('pda_device') || '',
   location: store('pda_loc') || '',
   recent: storeJson('pda_recent') || [],
@@ -863,21 +863,43 @@ function confirmModal(title, body, okText, onOk) {
 }
 
 // ถ้ายังไม่มีชื่อ = บังคับกรอก: ไม่มีปุ่มยกเลิก ปิดไม่ได้จนกว่าจะใส่ชื่อ
+// ชื่อที่ใช้ไม่ได้: ว่าง, สั้นกว่า 2 ตัว, หรือมีแต่ 0 / - / . / _ / ช่องว่าง (เช่น "0" ที่ใช้ปิดชื่อหลังเลิกงาน)
+function validName(v) {
+  v = String(v || '').trim();
+  return v.length >= 2 && !/^[0\-._\s]+$/.test(v);
+}
+
+// ถ้ายังไม่มีชื่อ = บังคับกรอก: ไม่มีปุ่มยกเลิก ปิดไม่ได้จนกว่าจะใส่ชื่อ
 function openUserModal() {
   var required = !S.user;
   openModal('<h3>' + (required ? 'กรุณากรอกชื่อก่อนเริ่มใช้งาน' : 'ชื่อผู้สแกน') + '</h3>' +
     '<p class="muted small">ใช้บันทึกว่าใครเป็นคนสแกน / แก้ยอด / ลบ (จำไว้ในเครื่องนี้)</p>' +
     '<input id="uName" class="field big" placeholder="ชื่อ หรือ รหัสพนักงาน" autocomplete="off" value="' + esc(S.user) + '">' +
     '<div class="actions">' + (required ? '' : '<button class="btn" id="mCancel">ยกเลิก</button>') +
-    '<button class="btn primary" id="mOk">' + (required ? 'เริ่มใช้งาน' : 'บันทึก') + '</button></div>', required);
+    '<button class="btn primary" id="mOk">' + (required ? 'เริ่มใช้งาน' : 'บันทึก') + '</button></div>' +
+    (required ? '' : '<hr class="sep"><button class="btn danger logout-btn" id="uLogout">🚪 จบงาน (ออกจากระบบ)</button>' +
+      '<p class="muted small center">คนถัดไปต้องกรอกชื่อของตัวเองก่อนสแกน</p>'), required);
   var inp = $('uName'); setTimeout(function () { inp.focus(); }, 50);
   inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); $('mOk').click(); } });
   if ($('mCancel')) $('mCancel').onclick = closeModal;
+  if ($('uLogout')) $('uLogout').onclick = logout;
   $('mOk').onclick = function () {
     var v = inp.value.trim();
-    if (!v) { toast('กรุณาใส่ชื่อ'); return; }
+    if (!validName(v)) { toast('กรุณาใส่ชื่อหรือรหัสพนักงานของตัวเอง (อย่างน้อย 2 ตัว ห้ามใช้ 0)', 3000); inp.focus(); return; }
     S.user = v; store('pda_user', v); closeModal(); render();
   };
+}
+
+// จบงาน: ล้างชื่อ + รายการที่ยังไม่ได้กดบันทึก → คนถัดไปต้องกรอกชื่อใหม่ (รายการรอส่งยังส่งต่อด้วยชื่อคนเดิม)
+function logout() {
+  var who = S.user;
+  S.user = ''; store('pda_user', null);
+  setDraft(null);
+  S.msg = null;
+  closeModal();
+  render();
+  openUserModal();
+  toast('จบงานแล้ว (' + who + ')');
 }
 
 function appLink() { return location.origin + location.pathname; }
