@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261115-2110'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261115-2117'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -1599,6 +1599,18 @@ function mapLayout() {
   return z;
 }
 
+// จอคอม: แสดง CO (ซ้าย) คู่กับ CQ (ขวา) ในหน้าเดียว
+var MAP_PAIR = ['CO', 'CQ'];
+var MAP_WIDE_MQ = window.matchMedia ? window.matchMedia('(min-width: 1000px)') : null;
+function mapWide() { return !!(MAP_WIDE_MQ && MAP_WIDE_MQ.matches); }
+function mapPairOn() { var l = mapLayout(); return mapWide() && MAP_PAIR.every(function (z) { return l[z]; }); }
+function mapShown() { return mapPairOn() && MAP_PAIR.indexOf(MAP.zone) >= 0 ? MAP_PAIR : [MAP.zone]; }
+function mapZoneShown(z) { return mapShown().indexOf(z) >= 0; }
+if (MAP_WIDE_MQ) {
+  var onWideChange = function () { if (S.view === 'map') renderMap(); };
+  if (MAP_WIDE_MQ.addEventListener) MAP_WIDE_MQ.addEventListener('change', onWideChange); else if (MAP_WIDE_MQ.addListener) MAP_WIDE_MQ.addListener(onWideChange);
+}
+
 function renderMap() {
   var zones = Object.keys(mapLayout());
   if (!MAP.zone) MAP.zone = (S.location && zones.indexOf(S.location.split('-')[0]) >= 0) ? S.location.split('-')[0] : zones[0];
@@ -1606,8 +1618,10 @@ function renderMap() {
     '<section class="map-top">' +
       '<div id="mapSum" class="map-sum muted small">กำลังโหลด…</div>' +
       '<div class="map-bar">' +
-        '<div class="seg">' + zones.map(function (z) {
-          return '<button data-zone="' + z + '" class="' + (z === MAP.zone ? 'active' : '') + '">' + z + '</button>';
+        '<div class="seg">' + zones.filter(function (z) { return !(mapPairOn() && z === MAP_PAIR[1]); }).map(function (z) {
+          var pair = mapPairOn() && z === MAP_PAIR[0];
+          var act = pair ? MAP_PAIR.indexOf(MAP.zone) >= 0 : z === MAP.zone;
+          return '<button data-zone="' + z + '" class="' + (act ? 'active' : '') + '">' + (pair ? MAP_PAIR.join(' | ') : z) + '</button>';
         }).join('') + '</div>' +
         '<div class="seg">' +
           '<button data-mode="all" class="' + (MAP.mode === 'all' ? 'active' : '') + '">ทั้งหมด</button>' +
@@ -1672,18 +1686,20 @@ function renderMapGrid() {
   var latestLoc = (MAP.data.recent && MAP.data.recent[0]) ? (MAP.data.recent[0].to || MAP.data.recent[0].from) : '';
   var hotSince = Date.now() - RECENT_MIN * 60000;
   // สรุปทั้งคลัง + โซนนี้
+  var shown = mapShown();
   var all = 0, used = 0, usedToday = 0, zAll = 0, zUsed = 0, zToday = 0;
   (window.LOCATIONS || []).forEach(function (c) {
-    var i = info(c), inZone = c.indexOf(MAP.zone + '-') === 0;
+    var i = info(c), inZone = mapZoneShown(c.split('-')[0]);
     all++; if (i.n) used++; if (i.today) usedToday++;
     if (inZone) { zAll++; if (i.n) zUsed++; if (i.today) zToday++; }
   });
   $('mapSum').innerHTML = 'ทั้งคลัง: มีของ <b>' + used + '</b> / ' + all + ' Location · วันนี้ <b>' + usedToday + '</b>' +
-    ' &nbsp;|&nbsp; โซน ' + esc(MAP.zone) + ': <b>' + zUsed + '</b> / ' + zAll + ' · วันนี้ <b>' + zToday + '</b>' +
+    ' &nbsp;|&nbsp; โซน ' + esc(shown.join(' + ')) + ': <b>' + zUsed + '</b> / ' + zAll + ' · วันนี้ <b>' + zToday + '</b>' +
     (MAP.err ? ' <span class="err-text">(อัปเดตไม่ได้: ' + esc(MAP.err) + ')</span>' : '');
 
-  var racks = lay[MAP.zone] || {};
-  out.innerHTML = Object.keys(racks).sort().map(function (rk) {
+  function zoneHtml(zone) {
+  var racks = lay[zone] || {};
+  return Object.keys(racks).sort().map(function (rk) {
     var bays = Object.keys(racks[rk]).sort();
     var levels = [];
     bays.forEach(function (b) { racks[rk][b].forEach(function (l) { if (levels.indexOf(l) < 0) levels.push(l); }); });
@@ -1692,7 +1708,7 @@ function renderMapGrid() {
     var rows = levels.map(function (lv) {
       return '<tr><th class="lv">' + lv + '</th>' + bays.map(function (b) {
         if (racks[rk][b].indexOf(lv) < 0) return '<td></td>';
-        var code = MAP.zone + '-' + rk + '-' + b + lv, i = info(code);
+        var code = zone + '-' + rk + '-' + b + lv, i = info(code);
         rAll++; if (i.n) rUsed++;
         var show = MAP.mode === 'today' ? i.today : i.n;
         var cls = !show ? 'empty' : (i.today ? 'today' : 'used');
@@ -1702,10 +1718,15 @@ function renderMapGrid() {
         return '<td><button class="cell ' + cls + '" data-cell="' + code + '" title="' + code + (i.last ? ' · ล่าสุด ' + esc(i.last) : '') + '">' + (show > 1 ? show : '') + '</button></td>';
       }).join('') + '</tr>';
     }).join('');
-    return '<div class="rack"><div class="rack-head"><b>' + esc(MAP.zone + '-' + rk) + '</b><span class="muted small">' + rUsed + ' / ' + rAll + '</span></div>' +
+    return '<div class="rack"><div class="rack-head"><b>' + esc(zone + '-' + rk) + '</b><span class="muted small">' + rUsed + ' / ' + rAll + '</span></div>' +
       '<div class="rack-scroll"><table class="rack-grid"><thead><tr><th></th>' +
       bays.map(function (b) { return '<th>' + Number(b) + '</th>'; }).join('') + '</tr></thead><tbody>' + rows + '</tbody></table></div></div>';
-  }).join('') + '<p class="muted small center">ตัวเลขในช่อง = จำนวนกล่อง (ถ้ามากกว่า 1) · แตะช่องเพื่อดูของในช่องนั้น</p>';
+  }).join('');
+  }
+  out.classList.toggle('pair', shown.length > 1);
+  out.innerHTML = (shown.length > 1 ? shown.map(function (z) {
+    return '<div class="zone-col"><div class="zone-head">โซน ' + esc(z) + '</div>' + zoneHtml(z) + '</div>';
+  }).join('') : zoneHtml(MAP.zone)) + '<p class="muted small center">ตัวเลขในช่อง = จำนวนกล่อง (ถ้ามากกว่า 1) · แตะช่องเพื่อดูของในช่องนั้น</p>';
   Array.prototype.forEach.call(out.querySelectorAll('[data-cell]'), function (b) {
     b.onclick = function () { openMapCell(b.getAttribute('data-cell')); };
   });
@@ -1730,7 +1751,7 @@ function renderMapRecent() {
   Array.prototype.forEach.call(el.querySelectorAll('[data-goto]'), function (b) {
     b.onclick = function () {
       var code = b.getAttribute('data-goto'), z = code.split('-')[0];
-      if (z !== MAP.zone && mapLayout()[z]) { MAP.zone = z; renderMap(); }
+      if (!mapZoneShown(z) && mapLayout()[z]) { MAP.zone = z; renderMap(); }
       openMapCell(code);
     };
   });
@@ -1894,9 +1915,9 @@ function rpGo(idx, noScroll) {
   var cur = RP.events[RP.idx - 1];
   // ข้ามโซนเองตามรายการที่กำลังเล่น
   var z = cur && rpZoneOf(rpLocOf(cur));
-  if (z && z !== MAP.zone && mapLayout()[z]) {
+  if (z && !mapZoneShown(z) && mapLayout()[z]) {
     MAP.zone = z;
-    Array.prototype.forEach.call(document.querySelectorAll('[data-zone]'), function (b) { b.classList.toggle('active', b.getAttribute('data-zone') === z); });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-zone]'), function (b) { var bz = b.getAttribute('data-zone'); b.classList.toggle('active', bz === z || (mapPairOn() && bz === MAP_PAIR[0] && MAP_PAIR.indexOf(z) >= 0)); });
     renderMapGrid(); // จะเรียก rpPaint ต่อเอง
   } else rpPaint();
   if ($('rpSlider')) $('rpSlider').value = RP.idx;
