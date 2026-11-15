@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261115-1606'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261115-1755'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -1387,7 +1387,9 @@ function renderManual() {
       '<div class="sec-title"><span>กรอกข้อมูลเอง</span><button class="btn small" id="mfCam">📸 สแกนเติมข้อมูล</button></div>' +
       '<label>Location *</label><button class="btn loc-pick" id="mfLoc"></button>' +
       '<label>รหัสสินค้า *</label>' +
-      '<input id="mfPart" class="field" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="เช่น 1005QT00179 (สแกนป้ายใส่ช่องนี้ได้)">' +
+      '<div class="ac-wrap"><input id="mfPart" class="field" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="พิมพ์รหัส / ชื่อ / Spec หรือสแกนป้าย">' +
+        '<div id="mfSug" class="ac-list hidden" role="listbox"></div></div>' +
+      '<div id="mfPartInfo" class="ac-info"></div>' +
       '<div class="grid2">' +
         '<div><label>Lot</label><input id="mfLot" class="field" autocomplete="off" spellcheck="false"></div>' +
         '<div><label>Package</label><input id="mfPkg" class="field" autocomplete="off" spellcheck="false"></div>' +
@@ -1408,11 +1410,20 @@ function renderManual() {
   $('mfCam').onclick = function () { openCameraScanner(fillManualFromScan); };
   var part = $('mfPart');
   part.addEventListener('keydown', function (e) {
+    var sug = $('mfSug'), open = sug && !sug.classList.contains('hidden');
+    if (open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); moveSuggest(e.key === 'ArrowDown' ? 1 : -1); return; }
+    if (e.key === 'Escape') { hideSuggest(); return; }
     if (e.key !== 'Enter') return;
     e.preventDefault();
-    if (looksLikeScan(part.value)) fillManualFromScan(part.value); else $('mfQty').focus();
+    if (looksLikeScan(part.value)) { hideSuggest(); fillManualFromScan(part.value); return; }
+    var act = open && sug.querySelector('.ac-item.active');
+    if (act) { pickSuggest(act.getAttribute('data-code')); return; }
+    hideSuggest(); $('mfQty').focus();
   });
-  part.addEventListener('change', function () { if (looksLikeScan(part.value)) fillManualFromScan(part.value); });
+  part.addEventListener('input', function () { showSuggest(part.value); updatePartInfo(); });
+  part.addEventListener('focus', function () { if (part.value.trim().length >= 2) showSuggest(part.value); });
+  part.addEventListener('blur', function () { setTimeout(hideSuggest, 200); });
+  part.addEventListener('change', function () { if (looksLikeScan(part.value)) { hideSuggest(); fillManualFromScan(part.value); } updatePartInfo(); });
   $('mfQty').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); saveManual(); } });
   $('mfClear').onclick = function () { clearManual(); part.focus(); };
   $('mfSave').onclick = saveManual;
@@ -1445,7 +1456,7 @@ function fillManualFromScan(raw) {
     return;
   }
   var p = parseQr(chk.text);
-  $('mfPart').value = p.part_code; $('mfLot').value = p.lot_no; $('mfPkg').value = p.pkg_ref;
+  $('mfPart').value = p.part_code; $('mfLot').value = p.lot_no; $('mfPkg').value = p.pkg_ref; updatePartInfo();
   $('mfQty').value = p.qty === '' ? '' : String(p.qty);
   setUnit(p.unit);
   manualSrc = { qr_raw: p.qr_raw, part_code: p.part_code, lot_no: p.lot_no, pkg_ref: p.pkg_ref };
@@ -1457,6 +1468,76 @@ function fillManualFromScan(raw) {
 function clearManual() {
   ['mfPart', 'mfLot', 'mfPkg', 'mfQty'].forEach(function (id) { if ($(id)) $(id).value = ''; });
   manualSrc = null;
+  hideSuggest(); updatePartInfo();
+}
+
+// ---------- เดารหัสสินค้าจาก BOM (หน้ากรอกเอง) ----------
+// ลำดับ: รหัสที่เพิ่งใช้ในเครื่องนี้ → รหัสขึ้นต้นด้วยคำที่พิมพ์ → รหัสมีคำนั้น → ชื่อ / Spec มีคำนั้น
+function suggestParts(q, max) {
+  q = String(q || '').trim().toUpperCase(); if (q.length < 2 || !window.BOM) return [];
+  var recent = [], seen = {};
+  S.recent.forEach(function (r) { if (r.part_code && !seen[r.part_code]) { seen[r.part_code] = 1; recent.push(r.part_code); } });
+  var tiers = [[], [], [], []];
+  function score(code) {
+    var b = window.BOM[code] || ['', ''], c = code.toUpperCase();
+    if (c.indexOf(q) === 0) return 1;
+    if (c.indexOf(q) > 0) return 2;
+    if ((b[0] + ' ' + b[1]).toUpperCase().indexOf(q) >= 0) return 3;
+    return 0;
+  }
+  recent.forEach(function (code) { if (window.BOM[code] && score(code)) tiers[0].push(code); });
+  for (var code in window.BOM) {
+    if (seen[code]) continue;
+    var sc = score(code); if (sc) tiers[sc].push(code);
+    if (tiers[1].length >= max * 6) break;
+  }
+  return tiers[0].concat(tiers[1].sort(), tiers[2].sort(), tiers[3]).slice(0, max);
+}
+
+function markQ(text, q) {
+  var t = String(text || ''), i = t.toUpperCase().indexOf(String(q).trim().toUpperCase());
+  if (!q || i < 0) return esc(t);
+  return esc(t.slice(0, i)) + '<mark>' + esc(t.slice(i, i + q.trim().length)) + '</mark>' + esc(t.slice(i + q.trim().length));
+}
+
+function showSuggest(q) {
+  var box = $('mfSug'); if (!box) return;
+  if (looksLikeScan(q)) { hideSuggest(); return; }
+  var list = suggestParts(q, 8);
+  if (!list.length || (list.length === 1 && list[0] === q.trim().toUpperCase())) { hideSuggest(); return; }
+  var used = {}; S.recent.forEach(function (r) { used[r.part_code] = 1; });
+  box.innerHTML = list.map(function (code, i) {
+    var b = window.BOM[code] || ['', ''];
+    return '<button type="button" class="ac-item' + (i === 0 ? ' active' : '') + '" data-code="' + esc(code) + '">' +
+      '<span class="ac-code">' + markQ(code, q) + (used[code] ? ' <span class="ac-recent">ใช้ล่าสุด</span>' : '') + '</span>' +
+      (b[0] ? '<span class="ac-name">' + markQ(b[0], q) + '</span>' : '') +
+      (b[1] ? '<span class="ac-spec">' + markQ(b[1], q) + '</span>' : '') + '</button>';
+  }).join('');
+  box.classList.remove('hidden');
+  Array.prototype.forEach.call(box.querySelectorAll('.ac-item'), function (b) {
+    b.onmousedown = function (e) { e.preventDefault(); }; // กันช่องหลุดโฟกัสก่อนกด
+    b.onclick = function () { pickSuggest(b.getAttribute('data-code')); };
+  });
+}
+function hideSuggest() { var box = $('mfSug'); if (box) { box.classList.add('hidden'); box.innerHTML = ''; } }
+function moveSuggest(d) {
+  var items = Array.prototype.slice.call(document.querySelectorAll('#mfSug .ac-item')); if (!items.length) return;
+  var i = items.findIndex(function (x) { return x.classList.contains('active'); });
+  i = (i + d + items.length) % items.length;
+  items.forEach(function (x, k) { x.classList.toggle('active', k === i); });
+  items[i].scrollIntoView({ block: 'nearest' });
+}
+function pickSuggest(code) {
+  $('mfPart').value = code; hideSuggest(); updatePartInfo();
+  ($('mfLot').value ? $('mfQty') : $('mfLot')).focus();
+}
+// ใต้ช่องรหัส: แสดงชื่อ / Spec ของรหัสที่กรอก หรือเตือนถ้าไม่พบใน BOM
+function updatePartInfo() {
+  var el = $('mfPartInfo'), inp = $('mfPart'); if (!el || !inp) return;
+  var v = inp.value.trim().toUpperCase(), b = bomInfo(v);
+  if (!v || looksLikeScan(v)) { el.innerHTML = ''; return; }
+  el.innerHTML = b ? '<span class="ok">✓ ' + esc(b.name || '') + '</span>' + (b.spec ? ' <span class="bom-spec">' + esc(b.spec) + '</span>' : '')
+    : (v.length >= 6 ? '<span class="warn-text">⚠ ไม่พบรหัสนี้ใน BOM — ตรวจสอบอีกครั้ง (บันทึกได้)</span>' : '');
 }
 
 function manualDirty() { return ['mfPart', 'mfLot', 'mfPkg', 'mfQty'].some(function (id) { return $(id) && $(id).value.trim(); }); }
