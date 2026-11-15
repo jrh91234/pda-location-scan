@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261115-2139'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261115-2145'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -230,11 +230,13 @@ function renderSync() {
   var el = $('sync'); if (!el) return;
   var pending = S.recent.filter(function (r) { return r.status === 'pending'; }).length;
   var pPhotos = S.photoQueue.length;
-  var busy = S.syncing || S.photoSyncing;
+  var parts = [];
+  if (pending) parts.push((S.syncing ? '⏳ กำลังส่ง ' : '⏸ รอส่ง ') + pending + ' รายการ');
+  if (pPhotos) parts.push((S.photoSyncing ? '📤 กำลังอัปโหลดรูปเบื้องหลัง ' : '🖼 รูปรออัปโหลด ') + pPhotos + ' รูป');
   el.innerHTML = pending || pPhotos
-    ? '<div class="sync-bar"><span>' + (busy ? '⏳ กำลังส่ง…' : '⏸ รอส่ง') + ' ' +
-        [pending ? pending + ' รายการ' : '', pPhotos ? pPhotos + ' รูป' : ''].filter(Boolean).join(', ') + (S.online ? '' : ' (ออฟไลน์)') + '</span>' +
-      '<button class="btn small" id="btnSync"' + (busy ? ' disabled' : '') + '>ส่งตอนนี้</button></div>'
+    ? '<div class="sync-bar"><span>' + parts.join(' · ') + (S.online ? '' : ' (ออฟไลน์)') +
+        (pPhotos && !pending ? '<br><span class="muted small">สแกนต่อได้เลย รูปจะส่งเองเมื่อมีสัญญาณ</span>' : '') + '</span>' +
+      '<button class="btn small" id="btnSync"' + (S.syncing ? ' disabled' : '') + '>ส่งตอนนี้</button></div>'
     : '';
   if ($('btnSync')) $('btnSync').onclick = function () { flush(true); flushPhotos(true); };
   refreshHeader();
@@ -2318,10 +2320,11 @@ function pickPhoto(scanId, useCamera, row) {
 }
 
 function addPhotos(scanId, files, row) {
+  if (files.length) toast('📷 กำลังบันทึกรูป…', 1200);
   return files.reduce(function (p, f) { return p.then(function () { return addPhoto(scanId, f, row); }); }, Promise.resolve())
     .then(function () {
       if (!files.length) return;
-      toast('แนบรูปแล้ว ' + files.length + ' รูป');
+      toast('บันทึกรูปแล้ว ' + files.length + ' รูป · อัปโหลดเบื้องหลัง ใช้งานต่อได้เลย', 2500);
       flushPhotos();
       // ถ่ายจากปุ่ม 📷 ในรายการ → เปิดหน้ารูปของรายการนั้นต่อ เพื่อกด "ถ่ายเพิ่ม" ได้ทันที
       if (!openPhotos.current && $('modal').classList.contains('hidden')) openPhotos(scanId, row);
@@ -2329,6 +2332,19 @@ function addPhotos(scanId, files, row) {
 }
 
 function compressImage(file) {
+  if (window.createImageBitmap) {
+    return createImageBitmap(file, { imageOrientation: 'from-image' }).then(function (bmp) {
+      var max = 1280, w = bmp.width, h = bmp.height, k = Math.min(1, max / Math.max(w, h));
+      var c = document.createElement('canvas');
+      c.width = Math.round(w * k); c.height = Math.round(h * k);
+      c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+      if (bmp.close) bmp.close();
+      return c.toDataURL('image/jpeg', 0.72);
+    }).catch(function () { return compressImageEl(file); });
+  }
+  return compressImageEl(file);
+}
+function compressImageEl(file) {
   return new Promise(function (res, rej) {
     var url = URL.createObjectURL(file), img = new Image();
     img.onload = function () {
