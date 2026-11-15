@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261115-1447'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261115-1456'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -18,7 +18,7 @@ var S = {
   photoSyncing: false,
   photoCache: {},
   msg: null,
-  hist: { filter: { date: today(), location: '', user: '', q: '', includeDeleted: false }, data: null, loading: false, error: '' }
+  hist: { filter: { dateFrom: workDay(), dateTo: workDay(), shift: '', location: '', user: '', q: '', includeDeleted: false }, data: null, loading: false, error: '' }
 };
 
 // ---------- helpers ----------
@@ -29,6 +29,20 @@ function esc(s) {
   });
 }
 function pad(n) { return (n < 10 ? '0' : '') + n; }
+// วันทำงานตัดที่ 08:00 (08:00 – 07:59 ของอีกวัน) · กะเช้า 08:00–19:59 · กะดึก 20:00–07:59
+var WD_DAY_START = 8, WD_NIGHT_START = 20;
+var SHIFT_TEXT = { day: 'เช้า', night: 'ดึก' };
+function workDay(d) {
+  d = d ? new Date(d) : new Date();
+  if (d.getHours() < WD_DAY_START) d.setDate(d.getDate() - 1);
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+}
+function shiftOf(at) { // 'yyyy-MM-dd HH:mm:ss' → { date, shift }
+  var m = String(at || '').match(/^(\d{4})-(\d\d)-(\d\d) (\d\d)/);
+  if (!m) return { date: '', shift: '' };
+  var h = Number(m[4]);
+  return { date: workDay(new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), h)), shift: h >= WD_DAY_START && h < WD_NIGHT_START ? 'day' : 'night' };
+}
 function today() { var d = new Date(); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
 function hhmm(iso) {
   if (!iso) return '';
@@ -772,7 +786,14 @@ function renderHistory() {
   var f = S.hist.filter;
   $('main').innerHTML =
     '<section class="filters">' +
-      '<input type="date" id="fDate" class="field" value="' + esc(f.date) + '">' +
+      '<label class="flabel">จากวันที่<input type="date" id="fFrom" class="field" value="' + esc(f.dateFrom) + '"></label>' +
+      '<label class="flabel">ถึงวันที่<input type="date" id="fTo" class="field" value="' + esc(f.dateTo) + '"></label>' +
+      '<div class="seg shift-seg">' + [['', 'ทุกกะ'], ['day', '☀️ กะเช้า'], ['night', '🌙 กะดึก']].map(function (o) {
+        return '<button type="button" data-shift="' + o[0] + '" class="' + (f.shift === o[0] ? 'active' : '') + '">' + o[1] + '</button>';
+      }).join('') + '</div>' +
+      '<div class="seg quick-seg"><button type="button" data-quick="today">วันนี้</button><button type="button" data-quick="yesterday">เมื่อวาน</button>' +
+        '<button type="button" data-quick="7">7 วัน</button><button type="button" data-quick="all">ทั้งหมด</button></div>' +
+      '<p class="muted small span2">วันทำงานตัดรอบ 08:00 – 07:59 ของอีกวัน · กะเช้า 08:00–19:59 · กะดึก 20:00–07:59 (สแกนตี 3 ของวันที่ 16 = วันที่ 15 กะดึก)</p>' +
       '<input id="fLoc" class="field" placeholder="Location (เช่น CO-01)" value="' + esc(f.location) + '">' +
       '<input id="fUser" class="field" placeholder="ผู้สแกน" value="' + esc(f.user) + '">' +
       '<input id="fQ" class="field" placeholder="ค้นหา รหัสสินค้า / Lot / QR" value="' + esc(f.q) + '">' +
@@ -786,6 +807,23 @@ function renderHistory() {
     loadHistory();
   };
   $('fXlsx').onclick = exportExcel;
+  Array.prototype.forEach.call(document.querySelectorAll('[data-shift]'), function (b) {
+    b.onclick = function () {
+      Array.prototype.forEach.call(document.querySelectorAll('[data-shift]'), function (x) { x.classList.toggle('active', x === b); });
+      $('fGo').click();
+    };
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('[data-quick]'), function (b) {
+    b.onclick = function () {
+      var q = b.getAttribute('data-quick'), t = workDay(), d = new Date(t + 'T12:00:00');
+      function ymd(x) { return x.getFullYear() + '-' + pad(x.getMonth() + 1) + '-' + pad(x.getDate()); }
+      if (q === 'today') { $('fFrom').value = $('fTo').value = t; }
+      else if (q === 'yesterday') { d.setDate(d.getDate() - 1); $('fFrom').value = $('fTo').value = ymd(d); }
+      else if (q === '7') { d.setDate(d.getDate() - 6); $('fFrom').value = ymd(d); $('fTo').value = t; }
+      else { $('fFrom').value = $('fTo').value = ''; }
+      $('fGo').click();
+    };
+  });
   ['fLoc', 'fUser', 'fQ'].forEach(function (id) {
     $(id).addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); $('fGo').click(); } });
   });
@@ -793,7 +831,10 @@ function renderHistory() {
 }
 
 function readHistFilter() {
-  return { date: $('fDate').value, location: $('fLoc').value.trim().toUpperCase(), user: $('fUser').value.trim(),
+  var sh = document.querySelector('[data-shift].active');
+  var from = $('fFrom').value, to = $('fTo').value;
+  if (from && to && from > to) { var t = from; from = to; to = t; $('fFrom').value = from; $('fTo').value = to; }
+  return { dateFrom: from, dateTo: to, shift: sh ? sh.getAttribute('data-shift') : '', location: $('fLoc').value.trim().toUpperCase(), user: $('fUser').value.trim(),
     q: $('fQ').value.trim(), includeDeleted: $('fDel').checked };
 }
 
@@ -801,7 +842,7 @@ function readHistFilter() {
 // ดึงทุกรายการตามตัวกรอง (ไม่จำกัด 300 แถวเหมือนหน้าจอ) แล้วสร้างไฟล์ .xlsx ในเบราว์เซอร์ด้วย SheetJS
 var XLSX_URL = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
 var XLSX_COLS = [
-  ['scanned_at', 'วันเวลาสแกน', 19], ['location', 'Location', 12], ['part_code', 'รหัสสินค้า', 16], ['lot_no', 'Lot', 13],
+  ['scanned_at', 'วันเวลาสแกน', 19], ['work_date', 'วันทำงาน', 11], ['shift', 'กะ', 6], ['location', 'Location', 12], ['part_code', 'รหัสสินค้า', 16], ['lot_no', 'Lot', 13],
   ['qty', 'จำนวน', 9], ['unit', 'หน่วย', 7], ['pkg_ref', 'Package', 10], ['scanned_by', 'ผู้สแกน', 14], ['device', 'เครื่อง', 10],
   ['status', 'สถานะ', 9], ['photos', 'จำนวนรูป', 8], ['location_original', 'Location เดิม', 12], ['qty_original', 'ยอดเดิม', 9],
   ['edited_by', 'แก้ไขล่าสุดโดย', 14], ['edited_at', 'แก้ไขล่าสุดเมื่อ', 19], ['edit_note', 'เหตุผลแก้ไข', 20],
@@ -821,6 +862,8 @@ function exportExcel() {
         var k = c[0], v = r[k];
         if (k === 'status') v = r.status === 'deleted' ? 'ลบแล้ว' : 'ใช้งาน';
         if (k === 'photos') v = (r.photos || []).length;
+        if (k === 'work_date') v = shiftOf(r.scanned_at).date;
+        if (k === 'shift') v = SHIFT_TEXT[shiftOf(r.scanned_at).shift] || '';
         if (k === 'location_original' && v === r.location) v = '';
         o[c[1]] = v === undefined || v === null ? '' : v;
       });
@@ -850,7 +893,8 @@ function exportExcel() {
     XLSX.utils.book_append_sheet(wb, ws2, 'สรุปตามพาร์ท');
 
     var now = new Date();
-    var name = 'PDA-Scan_' + (f.date ? f.date.replace(/-/g, '') : 'ทั้งหมด') + (f.location ? '_' + f.location : '') +
+    var range = f.dateFrom || f.dateTo ? (f.dateFrom || '…').replace(/-/g, '') + (f.dateTo && f.dateTo !== f.dateFrom ? '-' + f.dateTo.replace(/-/g, '') : '') : 'ทั้งหมด';
+    var name = 'PDA-Scan_' + range + (f.shift ? '_กะ' + SHIFT_TEXT[f.shift] : '') + (f.location ? '_' + f.location : '') +
       '_' + now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate()) + '-' + pad(now.getHours()) + pad(now.getMinutes()) + '.xlsx';
     XLSX.writeFile(wb, name);
     done();
@@ -885,7 +929,8 @@ function renderHistoryList() {
           '<div class="row-sub">' + locChip(r, !del, 'data-hloc') +
             (r.lot_no ? '<span>Lot ' + esc(r.lot_no) + '</span>' : '') +
             qtyChip(r, !del, 'data-hqty') + photoChip(r.scan_id, r) + '</div>' +
-          '<div class="row-sub muted"><span>' + esc(r.scanned_by) + '</span><span>' + esc(r.scanned_at) + '</span></div>' +
+          '<div class="row-sub muted"><span>' + esc(r.scanned_by) + '</span><span>' + esc(r.scanned_at) + '</span>' +
+            (shiftOf(r.scanned_at).shift ? '<span class="shift-tag ' + shiftOf(r.scanned_at).shift + '">กะ' + SHIFT_TEXT[shiftOf(r.scanned_at).shift] + '</span>' : '') + '</div>' +
           (del ? '<div class="row-sub muted small">ลบโดย ' + esc(r.deleted_by) + ' · ' + esc(r.deleted_at) + ' · ' + esc(r.delete_reason) + '</div>' : '') +
         '</div>' +
         (del ? '' : '<div class="row-actions"><button class="btn small" data-cam="' + esc(r.scan_id) + '" aria-label="ถ่ายรูป">📷</button>' +

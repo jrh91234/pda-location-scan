@@ -220,7 +220,10 @@ function listScans(filter) {
   const loc = clean_(filter.location, 40).toUpperCase();
   const user = clean_(filter.user, 60).toLowerCase();
   const q = clean_(filter.q, 80).toLowerCase();
-  const date = clean_(filter.date, 10);
+  // ช่วงวันทำงาน (ตัดวัน 08:00) + กะ: day = เช้า, night = ดึก — ยังรับ filter.date แบบเดิม (= วันทำงานเดียว)
+  let from = clean_(filter.dateFrom || filter.date, 10), to = clean_(filter.dateTo || filter.date, 10);
+  if (from && to && from > to) { const t = from; from = to; to = t; }
+  const shift = filter.shift === 'day' || filter.shift === 'night' ? filter.shift : '';
   const rows = readAll_(sheet_()).map(toClient_);
   const photos = photosByScan_();
   const out = [];
@@ -229,7 +232,12 @@ function listScans(filter) {
   for (let i = rows.length - 1; i >= 0; i--) {
     const r = rows[i];
     if (!filter.includeDeleted && r.status === 'deleted') continue;
-    if (date && r.scanned_at.slice(0, 10) !== date) continue;
+    if (from || to || shift) {
+      const ws = workShift_(r.scanned_at);
+      if (from && ws.date < from) continue;
+      if (to && ws.date > to) continue;
+      if (shift && ws.shift !== shift) continue;
+    }
     if (loc && r.location.indexOf(loc) !== 0) continue;
     if (user && r.scanned_by.toLowerCase().indexOf(user) < 0) continue;
     if (q && (r.qr_raw + ' ' + r.part_code + ' ' + r.lot_no).toLowerCase().indexOf(q) < 0) continue;
@@ -245,7 +253,7 @@ function listScans(filter) {
 
 /** สรุปต่อ Location สำหรับหน้าผัง: จำนวนกล่องที่ใช้งานอยู่ / สแกนวันนี้ / สแกนล่าสุดเมื่อไหร่ โดยใคร */
 function getLocationMap() {
-  const today = Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd');
+  const today = workShift_(fmt_(new Date())).date; // "วันนี้" = วันทำงาน (ตัดวัน 08:00)
   const rows = readAll_(sheet_()).map(toClient_);
   const map = {};
   rows.forEach(function (r) {
@@ -253,7 +261,7 @@ function getLocationMap() {
     const m = map[r.location] || (map[r.location] = { n: 0, today: 0, last: '', by: '' });
     m.n++;
     const at = r.edited_at > r.scanned_at ? r.edited_at : r.scanned_at;
-    if (at.slice(0, 10) === today) m.today++;
+    if (workShift_(at).date === today) m.today++;
     if (at > m.last) { m.last = at; m.by = r.edited_by && r.edited_at === at ? r.edited_by : r.scanned_by; m.ev = r.edited_at === at ? 'qty' : 'create'; m.part = r.part_code; }
   });
   // ความเคลื่อนไหวล่าสุดจาก Log (รวมการย้ายออก / ลบ ซึ่งไม่เหลือในแถวของ Location เดิม)
@@ -273,6 +281,20 @@ function getLocationMap() {
   });
   recent.sort(function (a, b) { return a.at < b.at ? 1 : a.at > b.at ? -1 : 0; });
   return { today: today, map: map, recent: recent.slice(0, 30) };
+}
+
+// วันทำงานเริ่ม 08:00 ถึง 07:59 ของอีกวัน · กะเช้า 08:00–19:59 · กะดึก 20:00–07:59
+const SHIFT_DAY_START = 8, SHIFT_NIGHT_START = 20;
+function workShift_(at) {
+  const m = String(at).match(/^(\d{4})-(\d\d)-(\d\d) (\d\d)/);
+  if (!m) return { date: '', shift: '' };
+  const h = Number(m[4]);
+  let date = m[1] + '-' + m[2] + '-' + m[3];
+  if (h < SHIFT_DAY_START) {
+    const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]) - 1));
+    date = d.toISOString().slice(0, 10);
+  }
+  return { date: date, shift: h >= SHIFT_DAY_START && h < SHIFT_NIGHT_START ? 'day' : 'night' };
 }
 
 /** หารายการที่ยังใช้งานอยู่ของ QR นี้ (ใช้ตรวจซ้ำทันทีหลังสแกน ก่อนกดบันทึก) — ไม่พบ = null */
