@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261115-1523'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261115-1606'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -1537,8 +1537,9 @@ function renderMap() {
       '<div class="map-legend small"><span><i class="lg empty"></i>ว่าง</span><span><i class="lg used"></i>มีของ</span>' +
         '<span><i class="lg today"></i>สแกน/ย้ายวันนี้</span><span><i class="lg cur"></i>Location ปัจจุบัน</span>' +
         '<span><i class="lg hot"></i>เคลื่อนไหวใน 1 ชม.</span><span><i class="lg latest"></i>ล่าสุด</span></div>' +
+      '<div id="rpPanel"></div>' +
     '</section>' +
-    '<div id="mapRecent"></div><div id="mapOut"></div>';
+    '<div id="mapRecent"></div><div id="mapOut"></div><div id="rpDock" class="rp-dock"></div>';
   Array.prototype.forEach.call(document.querySelectorAll('[data-zone]'), function (b) {
     b.onclick = function () { MAP.zone = b.getAttribute('data-zone'); renderMap(); };
   });
@@ -1546,6 +1547,7 @@ function renderMap() {
     b.onclick = function () { MAP.mode = b.getAttribute('data-mode'); renderMap(); };
   });
   $('mapReload').onclick = function () { loadMap(true); };
+  renderRpPanel();
   if (MAP.data) renderMapGrid();
   loadMap();
 }
@@ -1626,6 +1628,7 @@ function renderMapGrid() {
   Array.prototype.forEach.call(out.querySelectorAll('[data-cell]'), function (b) {
     b.onclick = function () { openMapCell(b.getAttribute('data-cell')); };
   });
+  rpPaint();
 }
 
 function renderMapRecent() {
@@ -1650,6 +1653,237 @@ function renderMapRecent() {
       openMapCell(code);
     };
   });
+}
+
+// ---------- ผัง: เล่นย้อนหลังลำดับการบันทึก + เส้นทางเดินของแต่ละคน ----------
+var RP = { open: false, date: '', shift: '', user: '', events: null, total: 0, idx: 0, playing: false, speed: 2, timer: null, loading: false, err: '' };
+var RP_SPEEDS = [1, 2, 5, 10];
+var RP_STEP_MS = 900; // 1x = 0.9 วินาทีต่อรายการ
+
+function rpLocOf(e) { return e.to || e.from; }
+function rpZoneOf(loc) { return String(loc || '').split('-')[0]; }
+
+function renderRpPanel() {
+  var el = $('rpPanel'); if (!el) return;
+  var dock = $('rpDock');
+  var top = document.querySelector('.map-top'); if (top) top.classList.toggle('rp-on', RP.open);
+  if (dock) dock.innerHTML = '';
+  if (!RP.open) {
+    el.innerHTML = '<button class="btn rp-open" id="rpOpen">▶ เล่นย้อนหลัง / เส้นทางเดิน</button>';
+    $('rpOpen').onclick = function () {
+      RP.open = true;
+      if (!RP.date) { RP.date = workDay(); RP.shift = currentShift(); }
+      renderRpPanel(); rpLoad();
+    };
+    return;
+  }
+  var users = S.hist.users.slice();
+  if (RP.user && users.indexOf(RP.user) < 0) users.unshift(RP.user);
+  var n = RP.events ? RP.events.length : 0;
+  el.innerHTML = '<div class="rp-box">' +
+    '<div class="rp-head"><b>▶ เล่นย้อนหลัง</b><button class="linkbtn" id="rpClose">✕ ปิด</button></div>' +
+    '<div class="rp-filters">' +
+      '<input type="date" id="rpDate" class="field" value="' + esc(RP.date) + '">' +
+      '<select id="rpUser" class="field"><option value="">👤 ทุกคน</option>' + users.map(function (u) {
+        return '<option value="' + esc(u) + '"' + (u === RP.user ? ' selected' : '') + '>' + esc(u) + '</option>';
+      }).join('') + '</select>' +
+      '<div class="seg">' + [['', 'ทุกกะ'], ['day', '☀️ เช้า'], ['night', '🌙 ดึก']].map(function (o) {
+        return '<button data-rpshift="' + o[0] + '" class="' + (RP.shift === o[0] ? 'active' : '') + '">' + o[1] + '</button>';
+      }).join('') + '</div>' +
+    '</div>' +
+    (RP.loading ? '<div class="muted small center">กำลังโหลด…</div>'
+      : RP.err ? '<div class="msg err">' + esc(RP.err) + '</div>'
+      : !RP.events ? ''
+      : !n ? '<div class="muted small center">ไม่มีการเคลื่อนไหวในช่วงนี้</div>'
+      : '<div class="rp-sum small" id="rpSum"></div>' +
+        (RP.total > n ? '<div class="muted small">แสดง ' + n + ' จาก ' + RP.total + ' รายการแรก</div>' : '')) +
+    '</div>';
+  if (dock && n && !RP.loading && !RP.err) dock.innerHTML =
+        '<div class="rp-player">' +
+          '<button class="btn small" id="rpStart" aria-label="เริ่มใหม่">⏮</button>' +
+          '<button class="btn small primary" id="rpPlay">' + (RP.playing ? '⏸' : '▶') + '</button>' +
+          '<button class="btn small" id="rpEnd" aria-label="ไปท้ายสุด">⏭</button>' +
+          '<div class="seg rp-speed">' + RP_SPEEDS.map(function (sp) {
+            return '<button data-rpspeed="' + sp + '" class="' + (RP.speed === sp ? 'active' : '') + '">' + sp + 'x</button>';
+          }).join('') + '</div>' +
+        '</div>' +
+        '<input type="range" id="rpSlider" min="0" max="' + n + '" value="' + RP.idx + '" class="rp-slider">' +
+        '<div class="rp-cap" id="rpCap"></div>';
+  $('rpClose').onclick = function () { rpPause(); RP.open = false; RP.events = null; renderRpPanel(); rpPaint(); };
+  $('rpDate').onchange = function () { RP.date = this.value; rpLoad(); };
+  $('rpUser').onchange = function () { RP.user = this.value; rpLoad(); };
+  Array.prototype.forEach.call(el.querySelectorAll('[data-rpshift]'), function (b) {
+    b.onclick = function () { RP.shift = b.getAttribute('data-rpshift'); rpLoad(); };
+  });
+  if (!n || !dock || !dock.innerHTML) { rpPaint(); return; }
+  $('rpPlay').onclick = function () { RP.playing ? rpPause() : rpPlay(); };
+  $('rpStart').onclick = function () { rpPause(); rpGo(0); };
+  $('rpEnd').onclick = function () { rpPause(); rpGo(n); };
+  Array.prototype.forEach.call(dock.querySelectorAll('[data-rpspeed]'), function (b) {
+    b.onclick = function () {
+      RP.speed = Number(b.getAttribute('data-rpspeed'));
+      Array.prototype.forEach.call(dock.querySelectorAll('[data-rpspeed]'), function (x) { x.classList.toggle('active', x === b); });
+    };
+  });
+  $('rpSlider').oninput = function () { rpPause(); rpGo(Number(this.value)); };
+  rpSummary();
+  rpGo(RP.idx, true);
+}
+
+function rpLoad() {
+  rpPause();
+  if (!S.hist.users.length) {
+    api('listScans', { limit: 1 }).then(function (d) {
+      if (d.users && d.users.length) { S.hist.users = d.users; storeJson('pda_users', d.users); if (RP.open && !RP.loading) renderRpPanel(); }
+    }, function () {});
+  }
+  RP.loading = true; RP.err = ''; RP.events = null; RP.idx = 0;
+  renderRpPanel(); rpPaint();
+  var want = [RP.date, RP.shift, RP.user].join('|');
+  api('getLocationEvents', { date: RP.date, shift: RP.shift, user: RP.user }).then(function (d) {
+    if (want !== [RP.date, RP.shift, RP.user].join('|')) return; // เปลี่ยนตัวกรองไปแล้ว
+    RP.loading = false; RP.events = d.events; RP.total = d.total; RP.idx = 0;
+    renderRpPanel();
+    if (RP.events.length) rpPlay();
+  }, function (err) {
+    RP.loading = false; RP.err = err.message; renderRpPanel();
+  });
+}
+
+function rpPlay() {
+  if (!RP.events || !RP.events.length) return;
+  if (RP.idx >= RP.events.length) RP.idx = 0;
+  RP.playing = true;
+  if ($('rpPlay')) $('rpPlay').textContent = '⏸';
+  (function tick() {
+    if (!RP.playing) return;
+    if (RP.idx >= RP.events.length || S.view !== 'map') { rpPause(); return; }
+    rpGo(RP.idx + 1);
+    RP.timer = setTimeout(tick, RP_STEP_MS / RP.speed);
+  })();
+}
+function rpPause() {
+  RP.playing = false; clearTimeout(RP.timer);
+  if ($('rpPlay')) $('rpPlay').textContent = '▶';
+}
+
+// ไปที่ลำดับ idx (= เล่นไปแล้ว idx รายการ)
+function rpGo(idx, noScroll) {
+  if (!RP.events) return;
+  RP.idx = Math.max(0, Math.min(RP.events.length, idx));
+  var cur = RP.events[RP.idx - 1];
+  // ข้ามโซนเองตามรายการที่กำลังเล่น
+  var z = cur && rpZoneOf(rpLocOf(cur));
+  if (z && z !== MAP.zone && mapLayout()[z]) {
+    MAP.zone = z;
+    Array.prototype.forEach.call(document.querySelectorAll('[data-zone]'), function (b) { b.classList.toggle('active', b.getAttribute('data-zone') === z); });
+    renderMapGrid(); // จะเรียก rpPaint ต่อเอง
+  } else rpPaint();
+  if ($('rpSlider')) $('rpSlider').value = RP.idx;
+  var cap = $('rpCap');
+  if (cap) {
+    if (!cur) cap.innerHTML = '<span class="muted">กด ▶ เพื่อเริ่ม · ' + RP.events.length + ' รายการ</span>';
+    else {
+      var b = bomInfo(cur.part) || {};
+      var loc = cur.ev === 'move' ? esc(cur.from) + ' → <b>' + esc(cur.to) + '</b>' : '<b>' + esc(rpLocOf(cur)) + '</b>';
+      var qty = cur.ev === 'qty' ? esc(fmtQty(cur.qf, cur.unit)) + ' → ' + esc(fmtQty(cur.qt, cur.unit)) : (cur.qt !== '' ? esc(fmtQty(cur.qt, cur.unit)) : '');
+      cap.innerHTML = '<div class="rp-cap-top"><span class="rp-n">' + RP.idx + ' / ' + RP.events.length + '</span>' +
+        '<span class="rp-time">' + esc(cur.at.slice(11, 16)) + '</span><span>' + (MAP_EV[cur.ev] || esc(cur.ev)) + ' ' + loc + '</span></div>' +
+        '<div class="muted small">' + esc(cur.part) + (b.name ? ' · ' + esc(b.name) : '') + (qty ? ' · ' + qty : '') + (cur.by ? ' · 👤 ' + esc(cur.by) : '') + '</div>';
+    }
+  }
+  if (!noScroll && RP.playing && cur) {
+    var cell = document.querySelector('[data-cell="' + rpLocOf(cur) + '"]');
+    if (cell) cell.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+}
+
+// ระบายสีช่องตามลำดับที่เล่นถึง + วาดเส้นทาง/ลูกศร
+function rpPaint() {
+  var out = $('mapOut'); if (!out) return;
+  var on = RP.open && RP.events && RP.events.length;
+  out.classList.toggle('replaying', !!on);
+  Array.prototype.forEach.call(out.querySelectorAll('.cell'), function (c) {
+    c.classList.remove('rp-done', 'rp-out', 'rp-del', 'rp-now', 'rp-t1', 'rp-t2', 'rp-t3', 'rp-from');
+    c.removeAttribute('data-seq');
+  });
+  var svg = $('rpSvg'); if (svg) svg.parentNode.removeChild(svg);
+  if (!on) return;
+  var state = {}, seq = {}, n = 0, cells = {};
+  function cell(code) { if (!(code in cells)) cells[code] = out.querySelector('[data-cell="' + code + '"]'); return cells[code]; }
+  for (var i = 0; i < RP.idx; i++) {
+    var e = RP.events[i];
+    if (e.ev === 'create' || e.ev === 'qty') { state[e.to || e.from] = 'rp-done'; }
+    if (e.ev === 'move') { if (e.from) state[e.from] = 'rp-out'; state[e.to] = 'rp-done'; }
+    if (e.ev === 'delete') state[e.from || e.to] = 'rp-del';
+    if (e.ev === 'create' || e.ev === 'move') { n++; seq[e.to] = n; }
+  }
+  Object.keys(state).forEach(function (code) { var c = cell(code); if (c) c.classList.add(state[code]); });
+  if (RP.user) Object.keys(seq).forEach(function (code) { var c = cell(code); if (c) c.setAttribute('data-seq', seq[code]); });
+  // หาง: รายการล่าสุด 4 รายการ
+  ['rp-now', 'rp-t1', 'rp-t2', 'rp-t3'].forEach(function (cls, k) {
+    var e = RP.events[RP.idx - 1 - k]; if (!e) return;
+    var c = cell(rpLocOf(e)); if (c) c.classList.add(cls);
+    if (k === 0 && e.ev === 'move' && e.from) { var f = cell(e.from); if (f) f.classList.add('rp-from'); }
+  });
+
+  // เส้นทาง (เมื่อเลือกคน) + ลูกศรย้ายของรายการปัจจุบัน
+  var box = out.getBoundingClientRect();
+  function pt(code) {
+    var c = cell(code); if (!c) return null;
+    var r = c.getBoundingClientRect();
+    return [Math.round(r.left - box.left + r.width / 2), Math.round(r.top - box.top + r.height / 2)];
+  }
+  var paths = [], segs = [], prev = null;
+  if (RP.user) {
+    for (var j = 0; j < RP.idx; j++) {
+      var ev = RP.events[j];
+      if (ev.ev !== 'create' && ev.ev !== 'move') continue;
+      var p = pt(ev.to);
+      if (p && prev) segs.push(p); else if (p) segs = [p];
+      if (!p && segs.length) { paths.push(segs); segs = []; }
+      prev = p;
+    }
+    if (segs.length) paths.push(segs);
+  }
+  var cur = RP.events[RP.idx - 1], arrow = null;
+  if (cur && cur.ev === 'move' && cur.from && cur.to) { var a = pt(cur.from), b = pt(cur.to); if (a && b) arrow = [a, b]; }
+  if (!paths.length && !arrow) return;
+  var NS = 'http://www.w3.org/2000/svg';
+  svg = document.createElementNS(NS, 'svg');
+  svg.id = 'rpSvg'; svg.setAttribute('class', 'rp-svg');
+  svg.setAttribute('width', out.scrollWidth); svg.setAttribute('height', out.scrollHeight);
+  svg.innerHTML = '<defs><marker id="rpArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">' +
+    '<path d="M0,0 L10,5 L0,10 z" fill="#c62f2f"/></marker>' +
+    '<marker id="rpDot" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5"><circle cx="5" cy="5" r="4" fill="#7a3db8"/></marker></defs>' +
+    paths.map(function (ps) {
+      return ps.length > 1 ? '<polyline class="rp-path" points="' + ps.map(function (p) { return p.join(','); }).join(' ') + '" marker-end="url(#rpArrow)"/>' : '';
+    }).join('') +
+    (arrow ? '<line class="rp-move" x1="' + arrow[0][0] + '" y1="' + arrow[0][1] + '" x2="' + arrow[1][0] + '" y2="' + arrow[1][1] + '" marker-end="url(#rpArrow)"/>' : '');
+  out.appendChild(svg);
+}
+
+// สรุปของคนที่เลือก (ทั้งรอบ ไม่ขึ้นกับตำแหน่งที่เล่น)
+function rpSummary() {
+  var el = $('rpSum'); if (!el || !RP.events) return;
+  var ev = RP.events, boxes = 0, moves = 0, dels = 0, edits = 0, back = 0, seen = {}, last = '', who = {};
+  ev.forEach(function (e) {
+    if (e.ev === 'create') boxes++; else if (e.ev === 'move') moves++; else if (e.ev === 'delete') dels++; else if (e.ev === 'qty') edits++;
+    if (e.by) who[e.by] = (who[e.by] || 0) + 1;
+    if (e.ev !== 'create' && e.ev !== 'move') return;
+    var rack = String(e.to).split('-').slice(0, 2).join('-');
+    if (rack !== last) { if (seen[rack]) back++; seen[rack] = 1; last = rack; }
+  });
+  var span = ev.length > 1 ? (bkkMs(ev[ev.length - 1].at) - bkkMs(ev[0].at)) / 60000 : 0;
+  var parts = ['🟢 บันทึก <b>' + boxes + '</b>', '🟠 ย้าย <b>' + moves + '</b>', '🔵 แก้ยอด <b>' + edits + '</b>', '🔴 ลบ <b>' + dels + '</b>',
+    '⏱ ' + esc(ev[0].at.slice(11, 16)) + '–' + esc(ev[ev.length - 1].at.slice(11, 16))];
+  if (RP.user) {
+    if (boxes > 1 && span) parts.push('เฉลี่ย <b>' + (Math.round(span / boxes * 10) / 10) + '</b> นาที/กล่อง');
+    parts.push('↩ ย้อนกลับแถวเดิม <b>' + back + '</b> ครั้ง');
+  } else {
+    parts.push('👤 ' + Object.keys(who).sort(function (a, b) { return who[b] - who[a]; }).map(function (u) { return esc(u) + ' ' + who[u]; }).join(', '));
+  }
+  el.innerHTML = parts.map(function (x) { return '<span>' + x + '</span>'; }).join('');
 }
 
 function openMapCell(code) {
@@ -2074,6 +2308,8 @@ function deletePhotoUi(id, scanId, row) {
 }
 
 // ======================= เริ่มต้น =======================
+window.addEventListener('resize', function () { if (S.view === 'map' && RP.open) rpPaint(); });
+
 (function init() {
   render();
   if (!S.user) openUserModal();

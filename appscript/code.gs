@@ -16,7 +16,7 @@ const TZ = 'Asia/Bangkok';
 const MAX_BATCH = 50;
 
 // ======================= Web App =======================
-const API_ACTIONS = { ping: ping, saveScans: saveScans, listScans: listScans, deleteScan: deleteScan, updateQty: updateQty, updateLocation: updateLocation, findByQr: findByQr, getScans: getScans, getTimeline: getTimeline, getPartPackages: getPartPackages, getLocationMap: getLocationMap,
+const API_ACTIONS = { ping: ping, saveScans: saveScans, listScans: listScans, deleteScan: deleteScan, updateQty: updateQty, updateLocation: updateLocation, findByQr: findByQr, getScans: getScans, getTimeline: getTimeline, getPartPackages: getPartPackages, getLocationMap: getLocationMap, getLocationEvents: getLocationEvents,
   uploadPhoto: uploadPhoto, getPhoto: getPhoto, deletePhoto: deletePhoto };
 
 function doPost(e) {
@@ -285,6 +285,31 @@ function getLocationMap() {
   });
   recent.sort(function (a, b) { return a.at < b.at ? 1 : a.at > b.at ? -1 : 0; });
   return { today: today, map: map, recent: recent.slice(0, 30) };
+}
+
+/** ลำดับการเคลื่อนไหว (บันทึก / แก้ยอด / ย้าย / ลบ) ของช่วงวันทำงาน + กะ + คน — ใช้เล่นย้อนหลังในหน้าผัง (เก่า → ใหม่) */
+function getLocationEvents(filter) {
+  filter = filter || {};
+  let from = clean_(filter.dateFrom || filter.date, 10), to = clean_(filter.dateTo || filter.date, 10);
+  if (from && to && from > to) { const t = from; from = to; to = t; }
+  const shift = filter.shift === 'day' || filter.shift === 'night' ? filter.shift : '';
+  const user = clean_(filter.user, 60).toLowerCase();
+  const out = [];
+  readLog_().forEach(function (e) {
+    const at = fmt_(e.at), ev = String(e.event);
+    if (!at || ev.indexOf('photo') === 0) return;
+    const ws = workShift_(at);
+    if (from && ws.date < from) return;
+    if (to && ws.date > to) return;
+    if (shift && ws.shift !== shift) return;
+    const by = String(e.by || '');
+    if (user && by.toLowerCase() !== user) return;
+    const num = function (v) { return v === '' || v == null ? '' : Number(v); };
+    out.push({ at: at, ev: ev, from: String(e.location_from || ''), to: String(e.location_to || ''), part: String(e.part_code || ''),
+               by: by, qf: num(e.qty_from), qt: num(e.qty_to), unit: String(e.unit || '') });
+  });
+  out.sort(function (a, b) { return a.at < b.at ? -1 : a.at > b.at ? 1 : 0; });
+  return { events: out.slice(0, 5000), total: out.length };
 }
 
 // วันทำงานเริ่ม 08:00 ถึง 07:59 ของอีกวัน · กะเช้า 08:00–19:59 · กะดึก 20:00–07:59
