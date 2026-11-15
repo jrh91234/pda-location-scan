@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261115-1459'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261115-1508'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -43,6 +43,22 @@ function shiftOf(at) { // 'yyyy-MM-dd HH:mm:ss' → { date, shift }
   if (!m) return { date: '', shift: '' };
   var h = Number(m[4]);
   return { date: workDay(new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), h)), shift: h >= WD_DAY_START && h < WD_NIGHT_START ? 'day' : 'night' };
+}
+// ---------- BOM: รหัสสินค้า → ชื่อ / Specification (js/bom.js) ----------
+function bomInfo(code) { var b = window.BOM && code ? window.BOM[String(code).trim()] : null; return b ? { name: b[0], spec: b[1] } : null; }
+function bomLine(code) {
+  var b = bomInfo(code); if (!b || !(b.name || b.spec)) return '';
+  return '<div class="bom-line">' + (b.name ? '<span class="bom-name">' + esc(b.name) + '</span>' : '') + (b.spec ? '<span class="bom-spec">' + esc(b.spec) + '</span>' : '') + '</div>';
+}
+// รหัสสินค้าที่ชื่อหรือ Specification มีคำค้นนี้ (ส่งไปให้เซิร์ฟเวอร์ค้นต่อ)
+function bomSearch(q) {
+  q = String(q || '').trim().toLowerCase(); if (q.length < 2 || !window.BOM) return [];
+  var out = [];
+  for (var k in window.BOM) {
+    var b = window.BOM[k];
+    if ((b[0] + ' ' + b[1]).toLowerCase().indexOf(q) >= 0) { out.push(k); if (out.length >= 500) break; }
+  }
+  return out;
 }
 function today() { var d = new Date(); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
 function hhmm(iso) {
@@ -239,7 +255,7 @@ function renderRecent() {
     var delLabel = r.status === 'saved' ? 'ลบ' : 'ลบออก';
     return '<div class="row st-' + r.status + '">' +
       '<div class="row-main">' +
-        '<div class="row-top">' + partLink(r, r.status === 'saved') + '<span class="tag ' + r.status + '">' + STATUS_TEXT[r.status] + '</span></div>' +
+        '<div class="row-top">' + partLink(r, r.status === 'saved') + '<span class="tag ' + r.status + '">' + STATUS_TEXT[r.status] + '</span></div>' + bomLine(r.part_code) +
         '<div class="row-sub">' +
           locChip(r, r.status === 'pending' || r.status === 'saved', 'data-loc-edit') +
           (r.lot_no ? '<span>Lot ' + esc(r.lot_no) + '</span>' : '') +
@@ -331,7 +347,7 @@ function renderDraft() {
   var checking = !d.dupChecked && !!apiUrl() && !dup;
   el.innerHTML = '<section class="draft-card' + (dup ? ' bad' : '') + '">' +
     '<div class="draft-head"><span>สแกนแล้ว · ยังไม่บันทึก</span><button class="link" id="dCancel">ยกเลิก</button></div>' +
-    '<div class="draft-part">' + esc(d.part_code || d.qr_raw) + '</div>' +
+    '<div class="draft-part">' + esc(d.part_code || d.qr_raw) + '</div>' + bomLine(d.part_code) +
     '<div class="row-sub">' +
       (d.lot_no ? '<span>Lot ' + esc(d.lot_no) + '</span>' : '') +
       '<button class="qty-btn" id="dQty">' + (d.qty !== '' ? esc(fmtQty(d.qty, d.unit)) : 'ใส่ยอด') + ' ✏️</button>' +
@@ -802,7 +818,7 @@ function renderHistory() {
       '<p class="muted small span2">วันทำงานตัดรอบ 08:00 – 07:59 ของอีกวัน · กะเช้า 08:00–19:59 · กะดึก 20:00–07:59 (สแกนตี 3 ของวันที่ 16 = วันที่ 15 กะดึก)</p>' +
       '<input id="fLoc" class="field" placeholder="Location (เช่น CO-01)" value="' + esc(f.location) + '">' +
       '<select id="fUser" class="field">' + userOptions(f.user) + '</select>' +
-      '<input id="fQ" class="field" placeholder="ค้นหา รหัสสินค้า / Lot / QR" value="' + esc(f.q) + '">' +
+      '<input id="fQ" class="field" placeholder="ค้นหา รหัส / ชื่อ / Spec / Lot" value="' + esc(f.q) + '">' +
       '<label class="radio"><input type="checkbox" id="fDel"' + (f.includeDeleted ? ' checked' : '') + '> แสดงรายการที่ลบแล้ว</label>' +
       '<button class="btn primary" id="fGo">ค้นหา</button>' +
       '<button class="btn export-btn" id="fXlsx">⬇️ Export Excel (ตามตัวกรอง)</button>' +
@@ -850,7 +866,8 @@ function readHistFilter() {
   var sh = document.querySelector('[data-shift].active');
   var from = $('fFrom').value, to = $('fTo').value;
   if (from && to && from > to) { var t = from; from = to; to = t; $('fFrom').value = from; $('fTo').value = to; }
-  return { dateFrom: from, dateTo: to, shift: sh ? sh.getAttribute('data-shift') : '', location: $('fLoc').value.trim().toUpperCase(), user: $('fUser').value, userExact: true,
+  var qv = $('fQ').value.trim();
+  return { qParts: bomSearch(qv), dateFrom: from, dateTo: to, shift: sh ? sh.getAttribute('data-shift') : '', location: $('fLoc').value.trim().toUpperCase(), user: $('fUser').value, userExact: true,
     q: $('fQ').value.trim(), includeDeleted: $('fDel').checked };
 }
 
@@ -858,7 +875,7 @@ function readHistFilter() {
 // ดึงทุกรายการตามตัวกรอง (ไม่จำกัด 300 แถวเหมือนหน้าจอ) แล้วสร้างไฟล์ .xlsx ในเบราว์เซอร์ด้วย SheetJS
 var XLSX_URL = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
 var XLSX_COLS = [
-  ['scanned_at', 'วันเวลาสแกน', 19], ['work_date', 'วันทำงาน', 11], ['shift', 'กะ', 6], ['location', 'Location', 12], ['part_code', 'รหัสสินค้า', 16], ['lot_no', 'Lot', 13],
+  ['scanned_at', 'วันเวลาสแกน', 19], ['work_date', 'วันทำงาน', 11], ['shift', 'กะ', 6], ['location', 'Location', 12], ['part_code', 'รหัสสินค้า', 16], ['bom_name', 'Child Item Name', 32], ['bom_spec', 'Specification', 16], ['lot_no', 'Lot', 13],
   ['qty', 'จำนวน', 9], ['unit', 'หน่วย', 7], ['pkg_ref', 'Package', 10], ['scanned_by', 'ผู้สแกน', 14], ['device', 'เครื่อง', 10],
   ['status', 'สถานะ', 9], ['photos', 'จำนวนรูป', 8], ['location_original', 'Location เดิม', 12], ['qty_original', 'ยอดเดิม', 9],
   ['edited_by', 'แก้ไขล่าสุดโดย', 14], ['edited_at', 'แก้ไขล่าสุดเมื่อ', 19], ['edit_note', 'เหตุผลแก้ไข', 20],
@@ -879,6 +896,7 @@ function exportExcel() {
         if (k === 'status') v = r.status === 'deleted' ? 'ลบแล้ว' : 'ใช้งาน';
         if (k === 'photos') v = (r.photos || []).length;
         if (k === 'work_date') v = shiftOf(r.scanned_at).date;
+        if (k === 'bom_name' || k === 'bom_spec') { var bi = bomInfo(r.part_code); v = bi ? (k === 'bom_name' ? bi.name : bi.spec) : ''; }
         if (k === 'shift') v = SHIFT_TEXT[shiftOf(r.scanned_at).shift] || '';
         if (k === 'location_original' && v === r.location) v = '';
         o[c[1]] = v === undefined || v === null ? '' : v;
@@ -901,11 +919,12 @@ function exportExcel() {
     });
     var srows = Object.keys(sum).sort().map(function (k) {
       var s = sum[k];
-      return { 'รหัสสินค้า': s.part, 'จำนวนกล่อง': s.n, 'ยอดรวม': Math.round(s.qty * 1000) / 1000, 'หน่วย': s.unit,
+      var bi = bomInfo(s.part) || {};
+      return { 'รหัสสินค้า': s.part, 'Child Item Name': bi.name || '', 'Specification': bi.spec || '', 'จำนวนกล่อง': s.n, 'ยอดรวม': Math.round(s.qty * 1000) / 1000, 'หน่วย': s.unit,
                'จำนวน Location': Object.keys(s.locs).length, 'Location': Object.keys(s.locs).sort().join(', ') };
     });
     var ws2 = XLSX.utils.json_to_sheet(srows.length ? srows : [{ 'รหัสสินค้า': '(ไม่มีรายการที่ใช้งาน)' }]);
-    ws2['!cols'] = [{ wch: 16 }, { wch: 11 }, { wch: 10 }, { wch: 7 }, { wch: 14 }, { wch: 60 }];
+    ws2['!cols'] = [{ wch: 16 }, { wch: 32 }, { wch: 16 }, { wch: 11 }, { wch: 10 }, { wch: 7 }, { wch: 14 }, { wch: 60 }];
     XLSX.utils.book_append_sheet(wb, ws2, 'สรุปตามพาร์ท');
 
     var now = new Date();
@@ -946,7 +965,7 @@ function renderHistoryList() {
       var del = r.status === 'deleted';
       return '<div class="row ' + (del ? 'st-deleted' : '') + '">' +
         '<div class="row-main">' +
-          '<div class="row-top">' + partLink(r, true) + (del ? '<span class="tag deleted">ลบแล้ว</span>' : '') + '</div>' +
+          '<div class="row-top">' + partLink(r, true) + (del ? '<span class="tag deleted">ลบแล้ว</span>' : '') + '</div>' + bomLine(r.part_code) +
           '<div class="row-sub">' + locChip(r, !del, 'data-hloc') +
             (r.lot_no ? '<span>Lot ' + esc(r.lot_no) + '</span>' : '') +
             qtyChip(r, !del, 'data-hqty') + photoChip(r.scan_id, r) + '</div>' +
@@ -1644,10 +1663,10 @@ function openMapCell(code) {
     var el = $('cellOut'); if (!el) return;
     var rows = d.rows.filter(function (r) { return r.location === code; });
     var items = local.map(function (r) {
-      return '<div class="row"><div class="row-main"><div class="row-top"><b class="part">' + esc(r.part_code || r.qr_raw) + '</b><span class="tag pending">รอส่ง</span></div>' +
+      return '<div class="row"><div class="row-main"><div class="row-top"><b class="part">' + esc(r.part_code || r.qr_raw) + '</b><span class="tag pending">รอส่ง</span></div>' + bomLine(r.part_code) +
         '<div class="row-sub">' + (r.lot_no ? '<span>Lot ' + esc(r.lot_no) + '</span>' : '') + '<span>' + esc(fmtQty(r.qty, r.unit)) + '</span></div></div></div>';
     }).concat(rows.map(function (r) {
-      return '<div class="row"><div class="row-main"><div class="row-top">' + partLink(r, true) + '</div>' +
+      return '<div class="row"><div class="row-main"><div class="row-top">' + partLink(r, true) + '</div>' + bomLine(r.part_code) +
         '<div class="row-sub">' + (r.lot_no ? '<span>Lot ' + esc(r.lot_no) + '</span>' : '') + (r.pkg_ref ? '<span>Pkg ' + esc(r.pkg_ref) + '</span>' : '') +
         '<span><b>' + esc(fmtQty(r.qty, r.unit) || '-') + '</b></span></div>' +
         '<div class="row-sub muted small"><span>' + fmtWhen(r.scanned_at) + '</span><span>👤 ' + esc(r.scanned_by) + '</span></div></div></div>';
@@ -1708,7 +1727,7 @@ function openTimeline(scanId, back) {
     if ($('modal').classList.contains('hidden')) return;
     var r = d.record, del = r.status === 'deleted';
     var head = '<div class="tl-head' + (del ? ' deleted' : '') + '">' +
-      '<div class="tl-part">' + esc(r.part_code || r.qr_raw) + '</div>' +
+      '<div class="tl-part">' + esc(r.part_code || r.qr_raw) + '</div>' + bomLine(r.part_code) +
       '<div class="row-sub">' + (r.lot_no ? '<span>Lot ' + esc(r.lot_no) + '</span>' : '') + (r.pkg_ref ? '<span>Pkg ' + esc(r.pkg_ref) + '</span>' : '') + '</div>' +
       '<div class="tl-now">' + (del ? '<span class="tag deleted">ลบแล้ว</span>'
         : 'ตอนนี้อยู่ <span class="loc-pill">' + esc(r.location) + '</span> · <b>' + esc(fmtQty(r.qty, r.unit) || '-') + '</b>') + '</div></div>';

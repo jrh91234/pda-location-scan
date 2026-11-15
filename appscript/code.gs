@@ -220,6 +220,9 @@ function listScans(filter) {
   const loc = clean_(filter.location, 40).toUpperCase();
   const user = clean_(filter.user, 60).toLowerCase();
   const q = clean_(filter.q, 80).toLowerCase();
+  // รหัสสินค้าที่ชื่อ / Specification ใน BOM ตรงกับคำค้น (หน้าเว็บค้นจาก js/bom.js แล้วส่งมา)
+  const qParts = {};
+  (Array.isArray(filter.qParts) ? filter.qParts.slice(0, 500) : []).forEach(function (c) { qParts[clean_(c, 40)] = 1; });
   // ช่วงวันทำงาน (ตัดวัน 08:00) + กะ: day = เช้า, night = ดึก — ยังรับ filter.date แบบเดิม (= วันทำงานเดียว)
   let from = clean_(filter.dateFrom || filter.date, 10), to = clean_(filter.dateTo || filter.date, 10);
   if (from && to && from > to) { const t = from; from = to; to = t; }
@@ -241,7 +244,7 @@ function listScans(filter) {
     }
     if (loc && r.location.indexOf(loc) !== 0) continue;
     if (user && (filter.userExact ? r.scanned_by.toLowerCase() !== user : r.scanned_by.toLowerCase().indexOf(user) < 0)) continue;
-    if (q && (r.qr_raw + ' ' + r.part_code + ' ' + r.lot_no).toLowerCase().indexOf(q) < 0) continue;
+    if (q && (r.qr_raw + ' ' + r.part_code + ' ' + r.lot_no).toLowerCase().indexOf(q) < 0 && !(qParts[r.part_code])) continue;
     if (r.status !== 'deleted') {
       total++;
       locs[r.location] = 1;
