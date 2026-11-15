@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261115-2151'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261115-2248'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -1964,7 +1964,9 @@ function renderRpPanel() {
   if (dock && n && !RP.loading && !RP.err) dock.innerHTML =
         '<div class="rp-player">' +
           '<button class="btn small" id="rpStart" aria-label="เริ่มใหม่">⏮</button>' +
+          '<button class="btn small rp-step" id="rpPrev" aria-label="ย้อน 1 รายการ" title="ย้อน 1 รายการ (←)">◀ 1</button>' +
           '<button class="btn small primary" id="rpPlay">' + (RP.playing ? '⏸' : '▶') + '</button>' +
+          '<button class="btn small rp-step" id="rpNext" aria-label="ไปต่อ 1 รายการ" title="ไปต่อ 1 รายการ (→)">1 ▶</button>' +
           '<button class="btn small" id="rpEnd" aria-label="ไปท้ายสุด">⏭</button>' +
           '<div class="seg rp-speed">' + RP_SPEEDS.map(function (sp) {
             return '<button data-rpspeed="' + sp + '" class="' + (RP.speed === sp ? 'active' : '') + '">' + sp + 'x</button>';
@@ -1982,6 +1984,8 @@ function renderRpPanel() {
   $('rpPlay').onclick = function () { RP.playing ? rpPause() : rpPlay(); };
   $('rpStart').onclick = function () { rpPause(); rpGo(0); };
   $('rpEnd').onclick = function () { rpPause(); rpGo(n); };
+  $('rpPrev').onclick = function () { rpPause(); rpGo(RP.idx - 1); };
+  $('rpNext').onclick = function () { rpPause(); rpGo(RP.idx + 1); };
   Array.prototype.forEach.call(dock.querySelectorAll('[data-rpspeed]'), function (b) {
     b.onclick = function () {
       RP.speed = Number(b.getAttribute('data-rpspeed'));
@@ -2640,6 +2644,15 @@ function deletePhotoUi(id, scanId, row) {
 
 // ======================= เริ่มต้น =======================
 window.addEventListener('resize', function () { if (S.view === 'map') rpPaint(); });
+// เล่นย้อนหลัง: ลูกศรซ้าย/ขวา = ทีละ 1 รายการ · Space = เล่น/หยุด (บนคอม)
+document.addEventListener('keydown', function (e) {
+  if (S.view !== 'map' || !RP.open || !RP.events || !RP.events.length) return;
+  if (!$('modal').classList.contains('hidden')) return;
+  var tg = e.target && e.target.tagName; if (tg === 'INPUT' || tg === 'SELECT' || tg === 'TEXTAREA') return;
+  if (e.key === 'ArrowLeft') { e.preventDefault(); rpPause(); rpGo(RP.idx - 1); }
+  else if (e.key === 'ArrowRight') { e.preventDefault(); rpPause(); rpGo(RP.idx + 1); }
+  else if (e.key === ' ') { e.preventDefault(); RP.playing ? rpPause() : rpPlay(); }
+});
 // เลื่อนแถวชั้นวางแนวนอน (มือถือ) → วาดลูกศรใหม่ให้ตรงช่อง
 var trailRaf = 0;
 document.addEventListener('scroll', function (e) {

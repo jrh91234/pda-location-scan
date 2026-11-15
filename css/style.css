@@ -394,3 +394,5 @@ button.loc-pill { border: 1px solid var(--blue); font-family: inherit; font-size
 
 .ac-kind { display: inline-block; font-size: 11px; font-weight: 700; color: #8a5a00; background: #fff1cc; border-radius: 5px; padding: 0 5px; vertical-align: 2px; }
 .ac-kind.part { color: var(--blue); background: var(--blue-soft); }
+
+.rp-step { font-weight: 700; min-width: 46px; }
