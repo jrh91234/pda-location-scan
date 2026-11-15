@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261115-1440'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261115-1447'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -1399,7 +1399,20 @@ function saveManual() {
 
 // ======================= ผัง Location =======================
 // แสดงทุก Location ตามแถวชั้นวาง (โซน → แถว → ช่อง 01–16 × ชั้น A/B) ว่าช่องไหนสแกนของเข้าไปแล้ว
-var MAP = { data: null, loading: false, zone: '', mode: 'all', err: '' };
+var MAP = { data: null, loading: false, zone: '', mode: 'all', err: '', more: false };
+var MAP_EV = { create: '🟢 บันทึก', qty: '🔵 แก้ยอด', move: '🟠 ย้าย', move_out: '🟠 ย้ายออก', delete: '🔴 ลบ', photo_add: '🖼 แนบรูป', photo_delete: '🗑 ลบรูป' };
+var RECENT_MIN = 60; // เคลื่อนไหวภายในกี่นาที = ติดจุดส้มในผัง
+
+// เวลาจากชีต (เวลาไทย 'yyyy-MM-dd HH:mm:ss') → ms
+function bkkMs(at) { var t = Date.parse(String(at).replace(' ', 'T') + '+07:00'); return isNaN(t) ? 0 : t; }
+function agoText(at) {
+  var t = bkkMs(at); if (!t) return '';
+  var m = Math.round((Date.now() - t) / 60000);
+  if (m < 1) return 'เมื่อสักครู่';
+  if (m < 60) return m + ' นาทีที่แล้ว';
+  if (m < 24 * 60) return Math.floor(m / 60) + ' ชม. ที่แล้ว';
+  return fmtWhen(at);
+}
 
 function mapLayout() {
   // { CO: { '01': { '01': ['A','B'], ... } } }
@@ -1431,9 +1444,10 @@ function renderMap() {
         '<button class="btn small" id="mapReload">🔄</button>' +
       '</div>' +
       '<div class="map-legend small"><span><i class="lg empty"></i>ว่าง</span><span><i class="lg used"></i>มีของ</span>' +
-        '<span><i class="lg today"></i>สแกน/ย้ายวันนี้</span><span><i class="lg cur"></i>Location ปัจจุบัน</span></div>' +
+        '<span><i class="lg today"></i>สแกน/ย้ายวันนี้</span><span><i class="lg cur"></i>Location ปัจจุบัน</span>' +
+        '<span><i class="lg hot"></i>เคลื่อนไหวใน 1 ชม.</span><span><i class="lg latest"></i>ล่าสุด</span></div>' +
     '</section>' +
-    '<div id="mapOut"></div>';
+    '<div id="mapRecent"></div><div id="mapOut"></div>';
   Array.prototype.forEach.call(document.querySelectorAll('[data-zone]'), function (b) {
     b.onclick = function () { MAP.zone = b.getAttribute('data-zone'); renderMap(); };
   });
@@ -1478,8 +1492,11 @@ function renderMapGrid() {
   var map = MAP.data.map || {}, pend = mapPendingByLoc(), lay = mapLayout();
   function info(code) {
     var m = map[code] || { n: 0, today: 0 }, p = pend[code] || 0;
-    return { n: m.n + p, today: m.today + p, last: m.last, by: m.by };
+    return { n: m.n + p, today: m.today + p, last: m.last, by: m.by, ev: m.ev };
   }
+  renderMapRecent();
+  var latestLoc = (MAP.data.recent && MAP.data.recent[0]) ? (MAP.data.recent[0].to || MAP.data.recent[0].from) : '';
+  var hotSince = Date.now() - RECENT_MIN * 60000;
   // สรุปทั้งคลัง + โซนนี้
   var all = 0, used = 0, usedToday = 0, zAll = 0, zUsed = 0, zToday = 0;
   (window.LOCATIONS || []).forEach(function (c) {
@@ -1506,7 +1523,9 @@ function renderMapGrid() {
         var show = MAP.mode === 'today' ? i.today : i.n;
         var cls = !show ? 'empty' : (i.today ? 'today' : 'used');
         if (code === S.location) cls += ' cur';
-        return '<td><button class="cell ' + cls + '" data-cell="' + code + '" title="' + code + '">' + (show > 1 ? show : '') + '</button></td>';
+        if (i.last && bkkMs(i.last) >= hotSince) cls += ' hot';
+        if (code === latestLoc) cls += ' latest';
+        return '<td><button class="cell ' + cls + '" data-cell="' + code + '" title="' + code + (i.last ? ' · ล่าสุด ' + esc(i.last) : '') + '">' + (show > 1 ? show : '') + '</button></td>';
       }).join('') + '</tr>';
     }).join('');
     return '<div class="rack"><div class="rack-head"><b>' + esc(MAP.zone + '-' + rk) + '</b><span class="muted small">' + rUsed + ' / ' + rAll + '</span></div>' +
@@ -1518,9 +1537,37 @@ function renderMapGrid() {
   });
 }
 
+function renderMapRecent() {
+  var el = $('mapRecent'); if (!el || !MAP.data) return;
+  var list = MAP.data.recent || [];
+  if (!list.length) { el.innerHTML = ''; return; }
+  var shown = list.slice(0, MAP.more ? 30 : 5);
+  el.innerHTML = '<div class="rack recent-box"><div class="rack-head"><b>⏱ ความเคลื่อนไหวล่าสุด</b>' +
+    (list.length > 5 ? '<button class="linkbtn small" id="mapMore">' + (MAP.more ? 'ย่อ' : 'ดูเพิ่ม (' + list.length + ')') + '</button>' : '') + '</div>' +
+    shown.map(function (e) {
+      var locs = e.ev === 'move' ? '<button class="loc-pill" data-goto="' + esc(e.from) + '">' + esc(e.from) + '</button> → <button class="loc-pill" data-goto="' + esc(e.to) + '">' + esc(e.to) + '</button>'
+        : '<button class="loc-pill" data-goto="' + esc(e.to || e.from) + '">' + esc(e.to || e.from) + '</button>';
+      return '<div class="ev-row"><span class="ev-when">' + esc(agoText(e.at)) + '</span>' +
+        '<span class="ev-what">' + (MAP_EV[e.ev] || esc(e.ev)) + ' ' + locs + '</span>' +
+        '<span class="muted small ev-who">' + esc(e.part) + (e.by ? ' · 👤 ' + esc(e.by) : '') + '</span></div>';
+    }).join('') + '</div>';
+  if ($('mapMore')) $('mapMore').onclick = function () { MAP.more = !MAP.more; renderMapRecent(); };
+  Array.prototype.forEach.call(el.querySelectorAll('[data-goto]'), function (b) {
+    b.onclick = function () {
+      var code = b.getAttribute('data-goto'), z = code.split('-')[0];
+      if (z !== MAP.zone && mapLayout()[z]) { MAP.zone = z; renderMap(); }
+      openMapCell(code);
+    };
+  });
+}
+
 function openMapCell(code) {
   var local = S.recent.filter(function (r) { return r.status === 'pending' && r.location === code; });
-  openModal('<h3>Location <span class="loc-pill">' + esc(code) + '</span></h3><div id="cellOut" class="center muted pad">กำลังโหลด…</div>' +
+  var mi = MAP.data && MAP.data.map && MAP.data.map[code];
+  openModal('<h3>Location <span class="loc-pill">' + esc(code) + '</span></h3>' +
+    (mi && mi.last ? '<p class="small">เคลื่อนไหวล่าสุด: <b>' + esc(agoText(mi.last)) + '</b> · ' + (MAP_EV[mi.ev] || esc(mi.ev || '')) +
+      (mi.part ? ' · ' + esc(mi.part) : '') + (mi.by ? ' · 👤 ' + esc(mi.by) : '') + '</p>' : '') +
+    '<div id="cellOut" class="center muted pad">กำลังโหลด…</div>' +
     '<div class="actions"><button class="btn" id="cellUse">📍 ตั้งเป็น Location ปัจจุบัน</button><button class="btn" id="mCancel">ปิด</button></div>');
   $('mCancel').onclick = closeModal;
   $('cellUse').onclick = function () {

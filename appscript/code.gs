@@ -254,9 +254,25 @@ function getLocationMap() {
     m.n++;
     const at = r.edited_at > r.scanned_at ? r.edited_at : r.scanned_at;
     if (at.slice(0, 10) === today) m.today++;
-    if (at > m.last) { m.last = at; m.by = r.edited_by && r.edited_at === at ? r.edited_by : r.scanned_by; }
+    if (at > m.last) { m.last = at; m.by = r.edited_by && r.edited_at === at ? r.edited_by : r.scanned_by; m.ev = r.edited_at === at ? 'qty' : 'create'; m.part = r.part_code; }
   });
-  return { today: today, map: map };
+  // ความเคลื่อนไหวล่าสุดจาก Log (รวมการย้ายออก / ลบ ซึ่งไม่เหลือในแถวของ Location เดิม)
+  const recent = [];
+  readLog_().forEach(function (e) {
+    const at = fmt_(e.at), ev = String(e.event), from = String(e.location_from || ''), to = String(e.location_to || '');
+    if (!at || ev.indexOf('photo') === 0) return; // แนบ/ลบรูป ไม่นับเป็นการเคลื่อนไหวของของ
+    const locs = [];
+    if (to) locs.push(to);
+    if (from && from !== to) locs.push(from);
+    if (!locs.length) return;
+    locs.forEach(function (loc) {
+      const m = map[loc] || (map[loc] = { n: 0, today: 0, last: '', by: '' });
+      if (at >= m.last) { m.last = at; m.by = String(e.by || ''); m.ev = ev === 'move' && loc === from ? 'move_out' : ev; m.part = String(e.part_code || ''); }
+    });
+    recent.push({ at: at, ev: ev, from: from, to: to, part: String(e.part_code || ''), by: String(e.by || '') });
+  });
+  recent.sort(function (a, b) { return a.at < b.at ? 1 : a.at > b.at ? -1 : 0; });
+  return { today: today, map: map, recent: recent.slice(0, 30) };
 }
 
 /** หารายการที่ยังใช้งานอยู่ของ QR นี้ (ใช้ตรวจซ้ำทันทีหลังสแกน ก่อนกดบันทึก) — ไม่พบ = null */

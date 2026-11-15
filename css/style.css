@@ -221,3 +221,16 @@ button.loc-pill { border: 1px solid var(--blue); font-family: inherit; font-size
 .cell.today, .lg.today { background: var(--green); border-color: var(--green); color: #fff; }
 .cell.cur, .lg.cur { outline: 3px solid var(--amber); outline-offset: -1px; }
 .lg.cur { background: #fff; }
+.cell.hot::after, .lg.hot::after { content: ''; position: absolute; top: 1px; right: 1px; width: 7px; height: 7px; border-radius: 50%; background: var(--amber); border: 1px solid #fff; }
+.cell, .lg { position: relative; }
+.lg.hot { background: #fff; }
+.cell.latest, .lg.latest { box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--red); animation: latestPulse 1.4s ease-in-out infinite; z-index: 1; }
+.lg.latest { background: #fff; animation: none; }
+@keyframes latestPulse { 50% { box-shadow: 0 0 0 2px #fff, 0 0 0 6px rgba(198,47,47,.35); } }
+.recent-box .ev-row { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; padding: 5px 0; border-top: 1px solid var(--line); font-size: 14px; }
+.ev-when { color: var(--muted); font-size: 12px; min-width: 78px; }
+.ev-what { flex: 1; min-width: 0; }
+.ev-who { width: 100%; padding-left: 86px; }
+.ev-row button.loc-pill { font-size: 13px; padding: 0 5px; }
+@media (max-width: 420px) { .ev-who { padding-left: 0; } }
+.linkbtn { background: none; border: 0; color: var(--blue); font-weight: 600; padding: 2px 4px; }
