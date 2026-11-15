@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261115-1804'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261115-2110'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -1777,7 +1777,8 @@ function renderRpPanel() {
       : !RP.events ? ''
       : !n ? '<div class="muted small center">ไม่มีการเคลื่อนไหวในช่วงนี้</div>'
       : '<div class="rp-sum small" id="rpSum"></div>' +
-        (RP.total > n ? '<div class="muted small">แสดง ' + n + ' จาก ' + RP.total + ' รายการแรก</div>' : '')) +
+        (RP.total > n ? '<div class="muted small">แสดง ' + n + ' จาก ' + RP.total + ' รายการแรก</div>' : '') +
+        rpLegend()) +
     '</div>';
   if (dock && n && !RP.loading && !RP.err) dock.innerHTML =
         '<div class="rp-player">' +
@@ -1809,6 +1810,44 @@ function renderRpPanel() {
   $('rpSlider').oninput = function () { rpPause(); rpGo(Number(this.value)); };
   rpSummary();
   rpGo(RP.idx, true);
+}
+
+// คำอธิบายสีระหว่างเล่นย้อนหลัง
+function rpLegend() {
+  var it = [
+    ['<i class="lg rp-l-now"></i>', 'รายการที่กำลังเล่น'],
+    ['<i class="lg rp-l-t1"></i><i class="lg rp-l-t3"></i>', '3 รายการก่อนหน้า (เข้ม → จาง)'],
+    ['<i class="lg rp-l-done"></i>', 'ช่องที่บันทึก/ย้ายของเข้าแล้ว'],
+    ['<i class="lg rp-l-out"></i>', 'ช่องที่ของถูกย้ายออกไป'],
+    ['<i class="lg rp-l-del"></i>', 'ช่องที่ลบรายการ'],
+    ['<i class="lg rp-l-from"></i><i class="rp-l-arrow"></i>', 'ย้ายของ: ช่องต้นทาง → ลูกศรแดงชี้ช่องปลายทาง']
+  ];
+  if (RP.user) it.push(['<i class="rp-l-path"></i>', 'เส้นทางเดินของ ' + esc(RP.user) + ' ตามลำดับเวลา'],
+    ['<i class="lg rp-l-seq">3</i>', 'เลขในช่อง = ลำดับที่ไปช่องนั้น']);
+  return '<div class="rp-legend small"><div class="rp-legend-h">คำอธิบาย</div>' +
+    it.map(function (x) { return '<span>' + x[0] + x[1] + '</span>'; }).join('') +
+    (RP.user ? '' : '<div class="muted">💡 เลือกชื่อคน เพื่อดูเส้นทางเดินและลำดับช่อง</div>') + '</div>';
+}
+
+// ประโยคบรรยายรายการที่กำลังเล่น
+function rpNarrate(cur, prev) {
+  var b = bomInfo(cur.part) || {};
+  var who = cur.by ? '<b>' + esc(cur.by) + '</b>' : 'มีคน';
+  var part = '<b>' + esc(cur.part) + '</b>' + (b.name ? ' (' + esc(b.name) + ')' : '');
+  var q = cur.qt !== '' && cur.qt != null ? ' จำนวน <b>' + esc(fmtQty(cur.qt, cur.unit)) + '</b>' : '';
+  var s = cur.ev === 'create' ? who + ' บันทึกกล่องใหม่ ' + part + q + ' ลงช่อง <b>' + esc(rpLocOf(cur)) + '</b>'
+    : cur.ev === 'move' ? who + ' ย้าย ' + part + q + ' จากช่อง <b>' + esc(cur.from) + '</b> ไปช่อง <b>' + esc(cur.to) + '</b>'
+    : cur.ev === 'qty' ? who + ' แก้ยอด ' + part + ' ที่ช่อง <b>' + esc(rpLocOf(cur)) + '</b> จาก ' + esc(fmtQty(cur.qf, cur.unit)) + ' เป็น <b>' + esc(fmtQty(cur.qt, cur.unit)) + '</b>'
+    : cur.ev === 'delete' ? who + ' ลบรายการ ' + part + ' ออกจากช่อง <b>' + esc(rpLocOf(cur)) + '</b>'
+    : who + ' ' + esc(cur.ev) + ' ' + part;
+  var notes = [];
+  if (prev) {
+    var gap = Math.round((bkkMs(cur.at) - bkkMs(prev.at)) / 60000);
+    notes.push(gap < 1 ? 'ต่อจากรายการก่อนทันที' : 'ห่างจากรายการก่อน ' + (gap >= 60 ? Math.floor(gap / 60) + ' ชม. ' + (gap % 60) + ' นาที' : gap + ' นาที'));
+    var rk = function (e) { return String(rpLocOf(e)).split('-').slice(0, 2).join('-'); };
+    if (rk(cur) !== rk(prev)) notes.push('เปลี่ยนไปแถว ' + esc(rk(cur)));
+  } else notes.push('รายการแรกของรอบนี้');
+  return '<div class="rp-say">' + s + '</div><div class="muted small">' + notes.join(' · ') + '</div>';
 }
 
 function rpLoad() {
@@ -1865,12 +1904,9 @@ function rpGo(idx, noScroll) {
   if (cap) {
     if (!cur) cap.innerHTML = '<span class="muted">กด ▶ เพื่อเริ่ม · ' + RP.events.length + ' รายการ</span>';
     else {
-      var b = bomInfo(cur.part) || {};
-      var loc = cur.ev === 'move' ? esc(cur.from) + ' → <b>' + esc(cur.to) + '</b>' : '<b>' + esc(rpLocOf(cur)) + '</b>';
-      var qty = cur.ev === 'qty' ? esc(fmtQty(cur.qf, cur.unit)) + ' → ' + esc(fmtQty(cur.qt, cur.unit)) : (cur.qt !== '' ? esc(fmtQty(cur.qt, cur.unit)) : '');
       cap.innerHTML = '<div class="rp-cap-top"><span class="rp-n">' + RP.idx + ' / ' + RP.events.length + '</span>' +
-        '<span class="rp-time">' + esc(cur.at.slice(11, 16)) + '</span><span>' + (MAP_EV[cur.ev] || esc(cur.ev)) + ' ' + loc + '</span></div>' +
-        '<div class="muted small">' + esc(cur.part) + (b.name ? ' · ' + esc(b.name) : '') + (qty ? ' · ' + qty : '') + (cur.by ? ' · 👤 ' + esc(cur.by) : '') + '</div>';
+        '<span class="rp-time">' + esc(cur.at.slice(11, 16)) + ' น.</span><span>' + (MAP_EV[cur.ev] || esc(cur.ev)) + '</span></div>' +
+        rpNarrate(cur, RP.events[RP.idx - 2]);
     }
   }
   if (!noScroll && RP.playing && cur) {

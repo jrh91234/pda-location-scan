@@ -294,6 +294,25 @@ button.loc-pill { border: 1px solid var(--blue); font-family: inherit; font-size
 .rp-path { fill: none; stroke: #7a3db8; stroke-width: 2; stroke-opacity: .7; stroke-linejoin: round; }
 .rp-move { stroke: #c62f2f; stroke-width: 2.5; stroke-dasharray: 5 3; }
 .map-top.rp-on { position: static; }
+.map-top.rp-on .map-legend { display: none; }
+.rp-legend { display: flex; flex-wrap: wrap; gap: 3px 14px; border-top: 1px dashed var(--line); padding-top: 6px; margin-top: 6px; }
+.rp-legend-h, .rp-legend > div { flex-basis: 100%; }
+.rp-legend-h { font-weight: 700; color: var(--ink); }
+.rp-legend span { display: flex; align-items: center; gap: 6px; }
+.rp-legend span > i:last-of-type { margin-right: 2px; }
+.lg.rp-l-now { background: var(--green); border-color: var(--green); box-shadow: 0 0 0 2px rgba(24,131,74,.35); }
+.lg.rp-l-t1 { background: #3fae6b; border-color: #2f9a5b; }
+.lg.rp-l-t3 { background: #bfe6cd; border-color: #8fd0a6; margin-left: -4px; }
+.lg.rp-l-done { background: #9cc0f0; border-color: #6d9ee0; }
+.lg.rp-l-out { background: #f3e2c4; border-color: #e0c08a; }
+.lg.rp-l-del { background: var(--red-soft); border-color: var(--red); }
+.lg.rp-l-from { background: #fff; outline: 2px dashed var(--amber); outline-offset: 1px; }
+.lg.rp-l-seq { background: #9cc0f0; border-color: #6d9ee0; font-size: 9px; font-weight: 700; font-style: normal; text-align: center; line-height: 12px; color: #1b2330; }
+.rp-l-arrow, .rp-l-path { display: inline-block; width: 22px; height: 0; flex: none; }
+.rp-l-arrow { border-top: 2.5px dashed #c62f2f; position: relative; }
+.rp-l-arrow::after { content: ''; position: absolute; right: -2px; top: -6px; border: 5px solid transparent; border-left: 7px solid #c62f2f; border-right: 0; }
+.rp-l-path { border-top: 2px solid #7a3db8; opacity: .8; }
+.rp-say { margin-top: 2px; line-height: 1.45; }
 .rp-dock { position: sticky; bottom: 0; z-index: 6; background: var(--card); border-top: 2px solid var(--blue); padding: 6px 10px 8px; box-shadow: 0 -4px 12px rgba(15,22,35,.12); }
 .rp-dock:empty { display: none; }
 /* ---------- เดารหัสสินค้า ---------- */
