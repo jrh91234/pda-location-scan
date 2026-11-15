@@ -244,3 +244,11 @@ button.loc-pill { border: 1px solid var(--blue); font-family: inherit; font-size
 .bom-name { color: var(--ink); }
 .bom-spec { color: var(--muted); font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
 .draft-card .bom-line, .tl-head .bom-line { font-size: 14px; }
+.ilines { margin: 3px 0 4px; font-size: 14px; line-height: 1.35; }
+.il { display: flex; align-items: baseline; gap: 6px; padding: 2px 0; border-bottom: 1px dashed var(--line); min-width: 0; }
+.il:last-child { border-bottom: 0; }
+.il-k { flex: 0 0 62px; color: var(--muted); font-size: 12px; }
+.il-v { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 6px; word-break: break-word; }
+.il-name .il-v { font-weight: 600; }
+.il-spec .il-v { font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+.il .qty-btn, .il .loc-pill { font-size: 14px; }

@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261115-1508'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261115-1517'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -50,6 +50,19 @@ function bomLine(code) {
   var b = bomInfo(code); if (!b || !(b.name || b.spec)) return '';
   return '<div class="bom-line">' + (b.name ? '<span class="bom-name">' + esc(b.name) + '</span>' : '') + (b.spec ? '<span class="bom-spec">' + esc(b.spec) + '</span>' : '') + '</div>';
 }
+// บรรทัด 2–6 ของแต่ละรายการ: ชื่อ / Spec / จำนวน / Lot / Location (บรรทัด 1 = รหัส อยู่ใน row-top)
+function itemLines(r, qtyHtml, locHtml) {
+  var b = bomInfo(r.part_code) || {};
+  function line(k, v, cls) { return '<div class="il' + (cls ? ' ' + cls : '') + '"><span class="il-k">' + k + '</span><span class="il-v">' + (v || '<span class="muted">-</span>') + '</span></div>'; }
+  return '<div class="ilines">' +
+    line('ชื่อ', b.name ? esc(b.name) : '', 'il-name') +
+    line('Spec', b.spec ? esc(b.spec) : '', 'il-spec') +
+    line('จำนวน', qtyHtml !== undefined ? qtyHtml : esc(fmtQty(r.qty, r.unit))) +
+    line('Lot', (r.lot_no ? esc(r.lot_no) : '') + (r.pkg_ref ? ' <span class="muted small">· Pkg ' + esc(r.pkg_ref) + '</span>' : '')) +
+    line('Location', locHtml !== undefined ? locHtml : (r.location ? '<span class="loc-pill">' + esc(r.location) + '</span>' : '')) +
+  '</div>';
+}
+
 // รหัสสินค้าที่ชื่อหรือ Specification มีคำค้นนี้ (ส่งไปให้เซิร์ฟเวอร์ค้นต่อ)
 function bomSearch(q) {
   q = String(q || '').trim().toLowerCase(); if (q.length < 2 || !window.BOM) return [];
@@ -255,12 +268,10 @@ function renderRecent() {
     var delLabel = r.status === 'saved' ? 'ลบ' : 'ลบออก';
     return '<div class="row st-' + r.status + '">' +
       '<div class="row-main">' +
-        '<div class="row-top">' + partLink(r, r.status === 'saved') + '<span class="tag ' + r.status + '">' + STATUS_TEXT[r.status] + '</span></div>' + bomLine(r.part_code) +
-        '<div class="row-sub">' +
-          locChip(r, r.status === 'pending' || r.status === 'saved', 'data-loc-edit') +
-          (r.lot_no ? '<span>Lot ' + esc(r.lot_no) + '</span>' : '') +
-          qtyChip(r, r.status === 'pending' || r.status === 'saved', 'data-qty') +
-          '<span class="muted">' + hhmm(r.scanned_at) + '</span>' +
+        '<div class="row-top">' + partLink(r, r.status === 'saved') + '<span class="tag ' + r.status + '">' + STATUS_TEXT[r.status] + '</span></div>' +
+        itemLines(r, qtyChip(r, r.status === 'pending' || r.status === 'saved', 'data-qty'), locChip(r, r.status === 'pending' || r.status === 'saved', 'data-loc-edit')) +
+        '<div class="row-sub muted small">' +
+          '<span>🕘 ' + hhmm(r.scanned_at) + '</span>' +
           photoChip(r.scan_id, null) +
         '</div>' + extra +
       '</div>' +
@@ -347,12 +358,9 @@ function renderDraft() {
   var checking = !d.dupChecked && !!apiUrl() && !dup;
   el.innerHTML = '<section class="draft-card' + (dup ? ' bad' : '') + '">' +
     '<div class="draft-head"><span>สแกนแล้ว · ยังไม่บันทึก</span><button class="link" id="dCancel">ยกเลิก</button></div>' +
-    '<div class="draft-part">' + esc(d.part_code || d.qr_raw) + '</div>' + bomLine(d.part_code) +
-    '<div class="row-sub">' +
-      (d.lot_no ? '<span>Lot ' + esc(d.lot_no) + '</span>' : '') +
-      '<button class="qty-btn" id="dQty">' + (d.qty !== '' ? esc(fmtQty(d.qty, d.unit)) : 'ใส่ยอด') + ' ✏️</button>' +
-      (d.pkg_ref ? '<span class="muted">Pkg ' + esc(d.pkg_ref) + '</span>' : '') +
-    '</div>' +
+    '<div class="draft-part">' + esc(d.part_code || d.qr_raw) + '</div>' +
+    itemLines(d, '<button class="qty-btn" id="dQty">' + (d.qty !== '' ? esc(fmtQty(d.qty, d.unit)) : 'ใส่ยอด') + ' ✏️</button>',
+      S.location ? '<span class="loc-pill">' + esc(S.location) + '</span> <span class="muted small">(จะบันทึกที่นี่)</span>' : '<span class="muted">ยังไม่เลือก</span>') +
     (dup
       ? '<div class="dup-box">⚠ QR นี้บันทึกแล้วที่ <b>' + esc(dup.location) + '</b>' +
           '<div class="small">' + (dup.status === 'pending' ? 'รายการรอส่งในเครื่องนี้' : esc(dup.scanned_by || '') + (dup.scanned_at ? ' · ' + esc(String(dup.scanned_at).replace('T', ' ').slice(0, 16)) : '')) + '</div></div>' +
@@ -965,11 +973,9 @@ function renderHistoryList() {
       var del = r.status === 'deleted';
       return '<div class="row ' + (del ? 'st-deleted' : '') + '">' +
         '<div class="row-main">' +
-          '<div class="row-top">' + partLink(r, true) + (del ? '<span class="tag deleted">ลบแล้ว</span>' : '') + '</div>' + bomLine(r.part_code) +
-          '<div class="row-sub">' + locChip(r, !del, 'data-hloc') +
-            (r.lot_no ? '<span>Lot ' + esc(r.lot_no) + '</span>' : '') +
-            qtyChip(r, !del, 'data-hqty') + photoChip(r.scan_id, r) + '</div>' +
-          '<div class="row-sub muted"><span>' + esc(r.scanned_by) + '</span><span>' + esc(r.scanned_at) + '</span>' +
+          '<div class="row-top">' + partLink(r, true) + (del ? '<span class="tag deleted">ลบแล้ว</span>' : '') + '</div>' +
+          itemLines(r, qtyChip(r, !del, 'data-hqty'), locChip(r, !del, 'data-hloc')) +
+          '<div class="row-sub muted small"><span>👤 ' + esc(r.scanned_by) + '</span><span>' + esc(r.scanned_at) + '</span>' + photoChip(r.scan_id, r) +
             (shiftOf(r.scanned_at).shift ? '<span class="shift-tag ' + shiftOf(r.scanned_at).shift + '">กะ' + SHIFT_TEXT[shiftOf(r.scanned_at).shift] + '</span>' : '') + '</div>' +
           (del ? '<div class="row-sub muted small">ลบโดย ' + esc(r.deleted_by) + ' · ' + esc(r.deleted_at) + ' · ' + esc(r.delete_reason) + '</div>' : '') +
         '</div>' +
@@ -1663,12 +1669,9 @@ function openMapCell(code) {
     var el = $('cellOut'); if (!el) return;
     var rows = d.rows.filter(function (r) { return r.location === code; });
     var items = local.map(function (r) {
-      return '<div class="row"><div class="row-main"><div class="row-top"><b class="part">' + esc(r.part_code || r.qr_raw) + '</b><span class="tag pending">รอส่ง</span></div>' + bomLine(r.part_code) +
-        '<div class="row-sub">' + (r.lot_no ? '<span>Lot ' + esc(r.lot_no) + '</span>' : '') + '<span>' + esc(fmtQty(r.qty, r.unit)) + '</span></div></div></div>';
+      return '<div class="row"><div class="row-main"><div class="row-top"><b class="part">' + esc(r.part_code || r.qr_raw) + '</b><span class="tag pending">รอส่ง</span></div>' + itemLines(r) + '</div></div>';
     }).concat(rows.map(function (r) {
-      return '<div class="row"><div class="row-main"><div class="row-top">' + partLink(r, true) + '</div>' + bomLine(r.part_code) +
-        '<div class="row-sub">' + (r.lot_no ? '<span>Lot ' + esc(r.lot_no) + '</span>' : '') + (r.pkg_ref ? '<span>Pkg ' + esc(r.pkg_ref) + '</span>' : '') +
-        '<span><b>' + esc(fmtQty(r.qty, r.unit) || '-') + '</b></span></div>' +
+      return '<div class="row"><div class="row-main"><div class="row-top">' + partLink(r, true) + '</div>' + itemLines(r) +
         '<div class="row-sub muted small"><span>' + fmtWhen(r.scanned_at) + '</span><span>👤 ' + esc(r.scanned_by) + '</span></div></div></div>';
     }));
     el.className = '';
