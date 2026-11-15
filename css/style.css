@@ -310,3 +310,35 @@ button.loc-pill { border: 1px solid var(--blue); font-family: inherit; font-size
 .ac-info { min-height: 18px; font-size: 13px; margin-top: 3px; }
 .ac-info .ok { color: var(--green); font-weight: 600; }
 .warn-text { color: var(--amber); }
+
+/* ---------- จอกว้าง (คอมพิวเตอร์) ---------- */
+@media (min-width: 1000px) {
+  main.view-scan, main.view-manual { max-width: 1180px; }
+  main.view-history { max-width: 1500px; }
+  main.view-map { max-width: none; padding: 14px 20px; display: grid; grid-template-columns: 380px minmax(0, 1fr); grid-template-rows: auto 1fr auto; column-gap: 18px; align-items: start; }
+  main.view-map > .map-top { grid-column: 1; grid-row: 1; position: sticky; top: 100px; padding: 0; max-height: calc(100vh - 110px); overflow-y: auto; }
+  main.view-map > #mapRecent { grid-column: 1; grid-row: 2; }
+  main.view-map > #mapOut { grid-column: 2; grid-row: 1 / span 2; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(480px, 1fr)); gap: 10px; align-content: start; }
+  main.view-map > #mapOut > p { grid-column: 1 / -1; }
+  main.view-map > #rpDock { grid-column: 2; grid-row: 3; border-radius: 10px 10px 0 0; }
+  main.view-map .rack { margin-bottom: 0; padding: 10px; }
+  main.view-map .cell { height: 34px; font-size: 13px; }
+  main.view-map .rack-grid th { font-size: 12px; }
+  main.view-map .rack-grid th.lv { width: 18px; }
+  main.view-map .cell[data-seq]::before { font-size: 11px; }
+  main.view-map .rp-filters { grid-template-columns: 1fr; }
+  #recent { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  #recent > .row { margin-bottom: 0; }
+  #recent > .empty-list { grid-column: 1 / -1; }
+  .filters { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  #histOut { display: grid; grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); gap: 8px; align-items: start; }
+  #histOut > .row { margin-bottom: 0; }
+  #histOut > :not(.row) { grid-column: 1 / -1; }
+  .modal { align-items: center; }
+  .sheet { max-width: 760px; border-radius: 16px; }
+  .zoom-box { height: 72vh; }
+}
+@media (min-width: 1500px) {
+  #recent { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  main.view-scan, main.view-manual { max-width: 1500px; }
+}
