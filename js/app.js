@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261115-2248'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261115-2259'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -978,13 +978,21 @@ var XLSX_COLS = [
   ['deleted_by', 'ลบโดย', 12], ['deleted_at', 'ลบเมื่อ', 19], ['delete_reason', 'เหตุผลลบ', 16], ['qr_raw', 'QR', 40], ['scan_id', 'scan_id', 38]
 ];
 
+// ชื่อผู้บันทึกที่เป็นการทดสอบ (ทดสอบระบบ, test, Test01 …) — ไม่นำไปใน Excel
+var TEST_USER_RE = /test|ทดสอบ/i;
+function isTestUser(name) { return TEST_USER_RE.test(String(name || '')); }
+
 function exportExcel() {
   var f = readHistFilter();
   var btn = $('fXlsx'); btn.disabled = true; btn.textContent = 'กำลังเตรียมไฟล์…';
   function done() { btn.disabled = false; btn.textContent = '⬇️ Export Excel (ตามตัวกรอง)'; }
   Promise.all([loadScriptOnce(XLSX_URL), api('listScans', Object.assign({}, f, { limit: 20000, export: true }))]).then(function (res) {
     var d = res[1];
-    if (!d.rows.length) { done(); toast('ไม่มีข้อมูลตามตัวกรอง'); return; }
+    // ไม่ส่งออกข้อมูลทดสอบ (ผู้บันทึกชื่อมีคำว่า ทดสอบ / test)
+    var all = d.rows.length;
+    d.rows = d.rows.filter(function (r) { return !isTestUser(r.scanned_by); });
+    var skipped = all - d.rows.length;
+    if (!d.rows.length) { done(); toast(skipped ? 'มีแต่ข้อมูลทดสอบ (' + skipped + ' รายการ) — ไม่ได้ส่งออก' : 'ไม่มีข้อมูลตามตัวกรอง', 3000); return; }
     var rows = d.rows.slice().reverse().map(function (r) { // เก่า → ใหม่
       var o = {};
       XLSX_COLS.forEach(function (c) {
@@ -1029,7 +1037,7 @@ function exportExcel() {
       '_' + now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate()) + '-' + pad(now.getHours()) + pad(now.getMinutes()) + '.xlsx';
     XLSX.writeFile(wb, name);
     done();
-    toast('ดาวน์โหลด ' + d.rows.length + ' รายการ' + (d.rows.length < d.total ? ' (ตัดที่ 20,000 แถว)' : ''), 3000);
+    toast('ดาวน์โหลด ' + d.rows.length + ' รายการ' + (skipped ? ' · ไม่รวมข้อมูลทดสอบ ' + skipped + ' รายการ' : '') + (all < d.total ? ' (ตัดที่ 20,000 แถว)' : ''), 3500);
   }, function (err) { done(); toast(err.message === 'load failed' ? 'โหลดตัวสร้าง Excel ไม่ได้ (ต้องต่ออินเทอร์เน็ต)' : err.message, 3500); });
 }
 
