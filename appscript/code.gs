@@ -16,7 +16,7 @@ const TZ = 'Asia/Bangkok';
 const MAX_BATCH = 50;
 
 // ======================= Web App =======================
-const API_ACTIONS = { ping: ping, saveScans: saveScans, listScans: listScans, deleteScan: deleteScan, updateQty: updateQty, updateLocation: updateLocation, findByQr: findByQr, getScans: getScans, getTimeline: getTimeline, getPartPackages: getPartPackages,
+const API_ACTIONS = { ping: ping, saveScans: saveScans, listScans: listScans, deleteScan: deleteScan, updateQty: updateQty, updateLocation: updateLocation, findByQr: findByQr, getScans: getScans, getTimeline: getTimeline, getPartPackages: getPartPackages, getLocationMap: getLocationMap,
   uploadPhoto: uploadPhoto, getPhoto: getPhoto, deletePhoto: deletePhoto };
 
 function doPost(e) {
@@ -241,6 +241,22 @@ function listScans(filter) {
     if (out.length < limit) { r.photos = photos[r.scan_id] || []; out.push(r); }
   }
   return { rows: out, total: total, partCount: Object.keys(parts).length, locationCount: Object.keys(locs).length };
+}
+
+/** สรุปต่อ Location สำหรับหน้าผัง: จำนวนกล่องที่ใช้งานอยู่ / สแกนวันนี้ / สแกนล่าสุดเมื่อไหร่ โดยใคร */
+function getLocationMap() {
+  const today = Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd');
+  const rows = readAll_(sheet_()).map(toClient_);
+  const map = {};
+  rows.forEach(function (r) {
+    if (r.status === 'deleted' || !r.location) return;
+    const m = map[r.location] || (map[r.location] = { n: 0, today: 0, last: '', by: '' });
+    m.n++;
+    const at = r.edited_at > r.scanned_at ? r.edited_at : r.scanned_at;
+    if (at.slice(0, 10) === today) m.today++;
+    if (at > m.last) { m.last = at; m.by = r.edited_by && r.edited_at === at ? r.edited_by : r.scanned_by; }
+  });
+  return { today: today, map: map };
 }
 
 /** หารายการที่ยังใช้งานอยู่ของ QR นี้ (ใช้ตรวจซ้ำทันทีหลังสแกน ก่อนกดบันทึก) — ไม่พบ = null */

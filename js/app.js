@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261115-0735'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261115-1440'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -87,15 +87,16 @@ function render() {
     '<nav class="tabs">' +
       '<button data-view="scan" class="' + (S.view === 'scan' ? 'active' : '') + '">สแกน' + (pending ? ' <b class="badge">' + pending + '</b>' : '') + '</button>' +
       '<button data-view="manual" class="' + (S.view === 'manual' ? 'active' : '') + '">กรอกเอง</button>' +
+      '<button data-view="map" class="' + (S.view === 'map' ? 'active' : '') + '">ผัง</button>' +
       '<button data-view="history" class="' + (S.view === 'history' ? 'active' : '') + '">ประวัติ / ลบ</button>' +
     '</nav>' +
     '<main id="main"></main>';
   $('btnUser').onclick = openUserModal;
   $('btnSettings').onclick = openSettings;
   Array.prototype.forEach.call(document.querySelectorAll('.tabs button'), function (b) {
-    b.onclick = function () { S.view = b.getAttribute('data-view'); render(); if (S.view !== 'history') syncRecent(); };
+    b.onclick = function () { S.view = b.getAttribute('data-view'); render(); if (S.view !== 'history' && S.view !== 'map') syncRecent(); };
   });
-  if (S.view === 'scan') renderScan(); else if (S.view === 'manual') renderManual(); else renderHistory();
+  if (S.view === 'scan') renderScan(); else if (S.view === 'manual') renderManual(); else if (S.view === 'map') renderMap(); else renderHistory();
 }
 
 function refreshHeader() {
@@ -1394,6 +1395,156 @@ function saveManual() {
   refreshScanParts();
   flush();
   $('mfPart').focus();
+}
+
+// ======================= ผัง Location =======================
+// แสดงทุก Location ตามแถวชั้นวาง (โซน → แถว → ช่อง 01–16 × ชั้น A/B) ว่าช่องไหนสแกนของเข้าไปแล้ว
+var MAP = { data: null, loading: false, zone: '', mode: 'all', err: '' };
+
+function mapLayout() {
+  // { CO: { '01': { '01': ['A','B'], ... } } }
+  if (mapLayout.v) return mapLayout.v;
+  var z = {};
+  (window.LOCATIONS || []).forEach(function (code) {
+    var m = String(code).match(/^([A-Z]+)-(\d+)-(\d+)([A-Z])$/); if (!m) return;
+    var rack = ((z[m[1]] = z[m[1]] || {})[m[2]] = z[m[1]][m[2]] || {});
+    (rack[m[3]] = rack[m[3]] || []).push(m[4]);
+  });
+  mapLayout.v = z;
+  return z;
+}
+
+function renderMap() {
+  var zones = Object.keys(mapLayout());
+  if (!MAP.zone) MAP.zone = (S.location && zones.indexOf(S.location.split('-')[0]) >= 0) ? S.location.split('-')[0] : zones[0];
+  $('main').innerHTML =
+    '<section class="map-top">' +
+      '<div id="mapSum" class="map-sum muted small">กำลังโหลด…</div>' +
+      '<div class="map-bar">' +
+        '<div class="seg">' + zones.map(function (z) {
+          return '<button data-zone="' + z + '" class="' + (z === MAP.zone ? 'active' : '') + '">' + z + '</button>';
+        }).join('') + '</div>' +
+        '<div class="seg">' +
+          '<button data-mode="all" class="' + (MAP.mode === 'all' ? 'active' : '') + '">ทั้งหมด</button>' +
+          '<button data-mode="today" class="' + (MAP.mode === 'today' ? 'active' : '') + '">วันนี้</button>' +
+        '</div>' +
+        '<button class="btn small" id="mapReload">🔄</button>' +
+      '</div>' +
+      '<div class="map-legend small"><span><i class="lg empty"></i>ว่าง</span><span><i class="lg used"></i>มีของ</span>' +
+        '<span><i class="lg today"></i>สแกน/ย้ายวันนี้</span><span><i class="lg cur"></i>Location ปัจจุบัน</span></div>' +
+    '</section>' +
+    '<div id="mapOut"></div>';
+  Array.prototype.forEach.call(document.querySelectorAll('[data-zone]'), function (b) {
+    b.onclick = function () { MAP.zone = b.getAttribute('data-zone'); renderMap(); };
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('[data-mode]'), function (b) {
+    b.onclick = function () { MAP.mode = b.getAttribute('data-mode'); renderMap(); };
+  });
+  $('mapReload').onclick = function () { loadMap(true); };
+  if (MAP.data) renderMapGrid();
+  loadMap();
+}
+
+function loadMap(manual) {
+  if (MAP.loading) return;
+  if (!apiUrl()) { MAP.err = 'ยังไม่ได้ตั้งค่า API URL (กด ⚙)'; renderMapGrid(); return; }
+  MAP.loading = true;
+  if ($('mapReload')) $('mapReload').disabled = true;
+  api('getLocationMap').then(function (d) {
+    MAP.loading = false; MAP.data = d; MAP.err = ''; S.online = true;
+    if (S.view === 'map') { renderMapGrid(); if (manual) toast('อัปเดตผังแล้ว'); }
+  }, function (err) {
+    MAP.loading = false; MAP.err = err.message;
+    if (err.network) S.online = false;
+    if (S.view === 'map') renderMapGrid();
+  });
+}
+
+// รายการในเครื่องที่ยังไม่ได้ส่งขึ้นเซิร์ฟเวอร์ → นับรวมในผังด้วย
+function mapPendingByLoc() {
+  var out = {};
+  S.recent.forEach(function (r) { if (r.status === 'pending' && r.location) out[r.location] = (out[r.location] || 0) + 1; });
+  return out;
+}
+
+function renderMapGrid() {
+  var out = $('mapOut'); if (!out) return;
+  if ($('mapReload')) $('mapReload').disabled = MAP.loading;
+  if (!MAP.data) {
+    out.innerHTML = MAP.err ? '<div class="msg err">' + esc(MAP.err) + '</div>' : '<div class="center muted pad">กำลังโหลดผัง…</div>';
+    if ($('mapSum')) $('mapSum').textContent = '';
+    return;
+  }
+  var map = MAP.data.map || {}, pend = mapPendingByLoc(), lay = mapLayout();
+  function info(code) {
+    var m = map[code] || { n: 0, today: 0 }, p = pend[code] || 0;
+    return { n: m.n + p, today: m.today + p, last: m.last, by: m.by };
+  }
+  // สรุปทั้งคลัง + โซนนี้
+  var all = 0, used = 0, usedToday = 0, zAll = 0, zUsed = 0, zToday = 0;
+  (window.LOCATIONS || []).forEach(function (c) {
+    var i = info(c), inZone = c.indexOf(MAP.zone + '-') === 0;
+    all++; if (i.n) used++; if (i.today) usedToday++;
+    if (inZone) { zAll++; if (i.n) zUsed++; if (i.today) zToday++; }
+  });
+  $('mapSum').innerHTML = 'ทั้งคลัง: มีของ <b>' + used + '</b> / ' + all + ' Location · วันนี้ <b>' + usedToday + '</b>' +
+    ' &nbsp;|&nbsp; โซน ' + esc(MAP.zone) + ': <b>' + zUsed + '</b> / ' + zAll + ' · วันนี้ <b>' + zToday + '</b>' +
+    (MAP.err ? ' <span class="err-text">(อัปเดตไม่ได้: ' + esc(MAP.err) + ')</span>' : '');
+
+  var racks = lay[MAP.zone] || {};
+  out.innerHTML = Object.keys(racks).sort().map(function (rk) {
+    var bays = Object.keys(racks[rk]).sort();
+    var levels = [];
+    bays.forEach(function (b) { racks[rk][b].forEach(function (l) { if (levels.indexOf(l) < 0) levels.push(l); }); });
+    levels.sort();
+    var rUsed = 0, rAll = 0;
+    var rows = levels.map(function (lv) {
+      return '<tr><th class="lv">' + lv + '</th>' + bays.map(function (b) {
+        if (racks[rk][b].indexOf(lv) < 0) return '<td></td>';
+        var code = MAP.zone + '-' + rk + '-' + b + lv, i = info(code);
+        rAll++; if (i.n) rUsed++;
+        var show = MAP.mode === 'today' ? i.today : i.n;
+        var cls = !show ? 'empty' : (i.today ? 'today' : 'used');
+        if (code === S.location) cls += ' cur';
+        return '<td><button class="cell ' + cls + '" data-cell="' + code + '" title="' + code + '">' + (show > 1 ? show : '') + '</button></td>';
+      }).join('') + '</tr>';
+    }).join('');
+    return '<div class="rack"><div class="rack-head"><b>' + esc(MAP.zone + '-' + rk) + '</b><span class="muted small">' + rUsed + ' / ' + rAll + '</span></div>' +
+      '<div class="rack-scroll"><table class="rack-grid"><thead><tr><th></th>' +
+      bays.map(function (b) { return '<th>' + Number(b) + '</th>'; }).join('') + '</tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+  }).join('') + '<p class="muted small center">ตัวเลขในช่อง = จำนวนกล่อง (ถ้ามากกว่า 1) · แตะช่องเพื่อดูของในช่องนั้น</p>';
+  Array.prototype.forEach.call(out.querySelectorAll('[data-cell]'), function (b) {
+    b.onclick = function () { openMapCell(b.getAttribute('data-cell')); };
+  });
+}
+
+function openMapCell(code) {
+  var local = S.recent.filter(function (r) { return r.status === 'pending' && r.location === code; });
+  openModal('<h3>Location <span class="loc-pill">' + esc(code) + '</span></h3><div id="cellOut" class="center muted pad">กำลังโหลด…</div>' +
+    '<div class="actions"><button class="btn" id="cellUse">📍 ตั้งเป็น Location ปัจจุบัน</button><button class="btn" id="mCancel">ปิด</button></div>');
+  $('mCancel').onclick = closeModal;
+  $('cellUse').onclick = function () {
+    S.location = code; store('pda_loc', code);
+    closeModal(); S.view = 'scan'; render(); toast('ตั้ง Location เป็น ' + code);
+  };
+  api('listScans', { location: code, limit: 200 }).then(function (d) {
+    var el = $('cellOut'); if (!el) return;
+    var rows = d.rows.filter(function (r) { return r.location === code; });
+    var items = local.map(function (r) {
+      return '<div class="row"><div class="row-main"><div class="row-top"><b class="part">' + esc(r.part_code || r.qr_raw) + '</b><span class="tag pending">รอส่ง</span></div>' +
+        '<div class="row-sub">' + (r.lot_no ? '<span>Lot ' + esc(r.lot_no) + '</span>' : '') + '<span>' + esc(fmtQty(r.qty, r.unit)) + '</span></div></div></div>';
+    }).concat(rows.map(function (r) {
+      return '<div class="row"><div class="row-main"><div class="row-top">' + partLink(r, true) + '</div>' +
+        '<div class="row-sub">' + (r.lot_no ? '<span>Lot ' + esc(r.lot_no) + '</span>' : '') + (r.pkg_ref ? '<span>Pkg ' + esc(r.pkg_ref) + '</span>' : '') +
+        '<span><b>' + esc(fmtQty(r.qty, r.unit) || '-') + '</b></span></div>' +
+        '<div class="row-sub muted small"><span>' + fmtWhen(r.scanned_at) + '</span><span>👤 ' + esc(r.scanned_by) + '</span></div></div></div>';
+    }));
+    el.className = '';
+    el.innerHTML = items.length ? '<p class="muted small">' + items.length + ' กล่อง</p>' + items.join('') : '<div class="empty-list muted">ยังไม่มีของในช่องนี้</div>';
+    bindTimelineLinks(el);
+  }, function (err) {
+    var el = $('cellOut'); if (el) { el.className = 'msg err'; el.textContent = err.message; }
+  });
 }
 
 // ======================= Timeline ประวัติของแต่ละรายการ =======================
