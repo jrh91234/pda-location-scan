@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261115-0012'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261115-0735'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -1571,7 +1571,13 @@ function pickPhoto(scanId, useCamera, row) {
 
 function addPhotos(scanId, files, row) {
   return files.reduce(function (p, f) { return p.then(function () { return addPhoto(scanId, f, row); }); }, Promise.resolve())
-    .then(function () { if (files.length) { toast('แนบรูปแล้ว ' + files.length + ' รูป'); flushPhotos(); } });
+    .then(function () {
+      if (!files.length) return;
+      toast('แนบรูปแล้ว ' + files.length + ' รูป');
+      flushPhotos();
+      // ถ่ายจากปุ่ม 📷 ในรายการ → เปิดหน้ารูปของรายการนั้นต่อ เพื่อกด "ถ่ายเพิ่ม" ได้ทันที
+      if (!openPhotos.current && $('modal').classList.contains('hidden')) openPhotos(scanId, row);
+    });
 }
 
 function compressImage(file) {
@@ -1650,15 +1656,15 @@ function openPhotos(scanId, row) {
   openPhotos.current = { scanId: scanId, row: row };
   var r = findRecent(scanId) || row || {};
   var ids = photosFor(scanId, row);
-  openModal('<h3>รูปถ่าย</h3>' +
+  openModal('<h3>รูปถ่าย' + (ids.length ? ' <span class="muted small">(' + ids.length + ' รูป)</span>' : '') + '</h3>' +
     '<div class="muted small">' + esc(r.part_code || r.qr_raw || '') + (r.location ? ' @ ' + esc(r.location) : '') + '</div>' +
     (ids.length ? '<div class="photo-grid">' + ids.map(function (id) {
       return '<div class="photo"><img data-pid="' + esc(id) + '" alt="">' +
         (isPhotoPending(id) ? '<span class="ptag">รอส่ง</span>' : '') +
         '<button class="pdel" data-pdel="' + esc(id) + '" aria-label="ลบรูป">✕</button></div>';
     }).join('') + '</div>' : '<div class="empty-list muted">ยังไม่มีรูป</div>') +
-    '<div class="actions wrap"><button class="btn primary" id="pCam">📷 ถ่ายรูป</button><button class="btn" id="pGal">🖼 เลือกจากเครื่อง</button></div>' +
-    '<div class="actions"><button class="btn" id="mCancel">ปิด</button></div>');
+    '<div class="actions wrap"><button class="btn primary" id="pCam">📷 ' + (ids.length ? 'ถ่ายเพิ่ม' : 'ถ่ายรูป') + '</button><button class="btn" id="pGal">🖼 เลือกจากเครื่อง (ได้หลายรูป)</button></div>' +
+    '<div class="actions"><button class="btn" id="mCancel">' + (ids.length ? 'เสร็จ' : 'ปิด') + '</button></div>');
   var m = $('modal');
   m.onclick = function (e) { if (e.target === m) closePhotos(); };
   $('mCancel').onclick = closePhotos;
