@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261115-2123'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261115-2127'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -1628,13 +1628,13 @@ function renderMap() {
           '<button data-mode="all" class="' + (MAP.mode === 'all' ? 'active' : '') + '">ทั้งหมด</button>' +
           '<button data-mode="today" class="' + (MAP.mode === 'today' ? 'active' : '') + '">วันนี้</button>' +
         '</div>' +
-        '<button class="btn small' + (MAP.trail ? ' active' : '') + '" id="mapTrail" title="แสดงลูกศร 10 ความเคลื่อนไหวล่าสุด">➜ ' + TRAIL_N + ' ล่าสุด</button>' +
+        '<button class="btn small' + (MAP.trail ? ' active' : '') + '" id="mapTrail" title="แสดงลูกศรการย้ายของ 10 ครั้งล่าสุด">➜ ย้าย ' + TRAIL_N + ' ครั้งล่าสุด</button>' +
         '<button class="btn small" id="mapReload">🔄</button>' +
       '</div>' +
       '<div class="map-legend small"><span><i class="lg empty"></i>ว่าง</span><span><i class="lg used"></i>มีของ</span>' +
         '<span><i class="lg today"></i>สแกน/ย้ายวันนี้</span><span><i class="lg cur"></i>Location ปัจจุบัน</span>' +
         '<span><i class="lg hot"></i>เคลื่อนไหวใน 1 ชม.</span><span><i class="lg latest"></i>ล่าสุด</span>' +
-        (MAP.trail ? '<span><i class="lg-trail"></i><i class="trail-badge">1</i>ลูกศร ' + TRAIL_N + ' ความเคลื่อนไหวล่าสุด (1 = ล่าสุด, จาง = เก่ากว่า)</span>' : '') + '</div>' +
+        (MAP.trail ? '<span><i class="lg-trail"></i><i class="trail-badge">1</i>การย้ายของ ' + TRAIL_N + ' ครั้งล่าสุด: ต้นทาง → ปลายทาง (1 = ล่าสุด, จาง = เก่ากว่า)</span>' : '') + '</div>' +
       '<div id="rpPanel"></div>' +
     '</section>' +
     '<div id="mapRecent"></div><div id="mapOut"></div><div id="rpDock" class="rp-dock"></div>';
@@ -1737,14 +1737,18 @@ function renderMapGrid() {
   rpPaint();
 }
 
-// ลูกศร 10 ความเคลื่อนไหวล่าสุด (แสดงตลอดเมื่อไม่ได้เล่นย้อนหลัง)
-// เรียงจากเก่า → ใหม่: ลูกศรเชื่อมช่องตามลำดับเวลา · เลขกลม 1 = ล่าสุด · การย้าย = ลูกศรประจากช่องต้นทาง
+// ลูกศรการย้ายของ 10 ครั้งล่าสุด (นับย้อนหลังไม่จำกัดวัน · แสดงตลอดเมื่อไม่ได้เล่นย้อนหลัง)
+// ลูกศรจากช่องต้นทาง → ช่องปลายทาง · เลขกลม 1 = ล่าสุด · เก่ากว่าจะจางลง
+function mapMoves() {
+  var d = MAP.data || {};
+  var list = d.moves || (d.recent || []).filter(function (e) { return e.ev === 'move'; });
+  return list.filter(function (e) { return e.from && e.to && e.from !== e.to; }).slice(0, TRAIL_N);
+}
 function mapTrailPaint() {
   var out = $('mapOut'); if (!out) return;
   var old = $('trailSvg'); if (old) old.parentNode.removeChild(old);
   if (!MAP.trail || !MAP.data || (RP.open && RP.events && RP.events.length)) return;
-  var list = (MAP.data.recent || []).filter(function (e) { return e.ev !== 'delete' && (e.to || e.from); }).slice(0, TRAIL_N);
-  if (!list.length) return;
+  var list = mapMoves(); if (!list.length) return;
   var box = out.getBoundingClientRect();
   function pt(code) {
     var c = code && out.querySelector('[data-cell="' + code + '"]'); if (!c) return null;
@@ -1752,38 +1756,32 @@ function mapTrailPaint() {
     return { x: r.left - box.left + r.width / 2, y: r.top - box.top + r.height / 2, w: r.width, h: r.height };
   }
   var n = list.length;
-  function op(rank) { return (1 - (rank - 1) / Math.max(n, 2) * 0.7).toFixed(2); } // rank 1 = ล่าสุด
+  function op(rank) { return (1 - (rank - 1) / Math.max(n - 1, 1) * 0.65).toFixed(2); } // rank 1 = ล่าสุด
   function curve(a, b, k) {
     var mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2, dx = b.x - a.x, dy = b.y - a.y;
     return 'M' + a.x.toFixed(1) + ',' + a.y.toFixed(1) + ' Q' + (mx - dy * k).toFixed(1) + ',' + (my + dx * k).toFixed(1) + ' ' + b.x.toFixed(1) + ',' + b.y.toFixed(1);
   }
-  var lines = '', moves = '', badges = '', seen = {};
-  for (var i = n - 1; i >= 0; i--) { // เก่า → ใหม่
-    var e = list[i], rank = i + 1, here = pt(e.to || e.from);
-    var prevE = list[i + 1], prev = prevE ? pt(prevE.to || prevE.from) : null;
-    if (prev && here && (prev.x !== here.x || prev.y !== here.y)) {
-      lines += '<path class="trail-line' + (rank === 1 ? ' trail-new' : '') + '" d="' + curve(prev, here, 0.12) + '" opacity="' + op(rank) + '" marker-end="url(#trailArrow)"/>';
-    }
-    if (e.ev === 'move' && e.from && e.to) {
-      var a = pt(e.from), b = pt(e.to);
-      if (a && b) moves += '<path class="trail-move" d="' + curve(a, b, -0.18) + '" opacity="' + op(rank) + '" marker-end="url(#trailMoveArrow)"/>';
-      if (a) moves += '<circle class="trail-from" cx="' + a.x.toFixed(1) + '" cy="' + a.y.toFixed(1) + '" r="' + (Math.min(a.w, a.h) / 2 - 1).toFixed(1) + '" opacity="' + op(rank) + '"/>';
-    }
+  var arrows = '', marks = '', badges = '', seen = {};
+  for (var i = n - 1; i >= 0; i--) { // วาดเก่าก่อน ใหม่ทับด้านบน
+    var e = list[i], rank = i + 1, a = pt(e.from), b = pt(e.to), o = op(rank);
+    var tip = '<title>' + esc('#' + rank + ' ย้าย ' + e.part + ' ' + e.from + ' → ' + e.to + (e.by ? ' · ' + e.by : '') + ' · ' + agoText(e.at)) + '</title>';
+    if (a && b) arrows += '<path class="trail-line' + (rank === 1 ? ' trail-new' : '') + '" d="' + curve(a, b, 0.15) + '" opacity="' + o + '" marker-end="url(#trailArrow' + (rank === 1 ? 'New' : '') + ')">' + tip + '</path>';
+    if (a) marks += '<circle class="trail-from" cx="' + a.x.toFixed(1) + '" cy="' + a.y.toFixed(1) + '" r="' + (Math.min(a.w, a.h) / 2 - 1).toFixed(1) + '" opacity="' + o + '"/>';
   }
-  list.forEach(function (e, i) { // เลขกลม: ช่องละเลขเดียว (ใหม่สุด)
-    var code = e.to || e.from; if (seen[code]) return; seen[code] = 1;
+  list.forEach(function (e, i) { // เลขกลมที่ช่องปลายทาง (ช่องละเลขเดียว = ครั้งล่าสุด) · ถ้าปลายทางไม่อยู่บนจอ ใส่ที่ต้นทาง
+    var code = pt(e.to) ? e.to : e.from; if (seen[code]) return; seen[code] = 1;
     var c = pt(code); if (!c) return;
     var x = c.x + c.w / 2 - 2, y = c.y - c.h / 2 + 2;
-    badges += '<g class="trail-badge-g' + (i === 0 ? ' new' : '') + '" opacity="' + op(i + 1) + '"><title>' + esc((MAP_EV[e.ev] || e.ev) + ' ' + code + ' · ' + e.part + (e.by ? ' · ' + e.by : '') + ' · ' + agoText(e.at)) + '</title>' +
+    badges += '<g class="trail-badge-g' + (i === 0 ? ' new' : '') + '" opacity="' + op(i + 1) + '"><title>' + esc('#' + (i + 1) + ' ย้าย ' + e.part + ' ' + e.from + ' → ' + e.to + (e.by ? ' · ' + e.by : '') + ' · ' + agoText(e.at)) + '</title>' +
       '<circle cx="' + x.toFixed(1) + '" cy="' + y.toFixed(1) + '" r="8"/><text x="' + x.toFixed(1) + '" y="' + (y + 3.5).toFixed(1) + '">' + (i + 1) + '</text></g>';
   });
-  if (!lines && !moves && !badges) return;
+  if (!arrows && !badges) return;
   var NS = 'http://www.w3.org/2000/svg', svg = document.createElementNS(NS, 'svg');
   svg.id = 'trailSvg'; svg.setAttribute('class', 'trail-svg');
   svg.setAttribute('width', out.scrollWidth); svg.setAttribute('height', out.scrollHeight);
   svg.innerHTML = '<defs><marker id="trailArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#d9480f"/></marker>' +
-    '<marker id="trailMoveArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#c62f2f"/></marker></defs>' +
-    lines + moves + badges;
+    '<marker id="trailArrowNew" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#c62f2f"/></marker></defs>' +
+    marks + arrows + badges;
   out.appendChild(svg);
 }
 

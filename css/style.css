@@ -368,7 +368,8 @@ button.loc-pill { border: 1px solid var(--blue); font-family: inherit; font-size
 /* ลูกศร 10 ความเคลื่อนไหวล่าสุด */
 .trail-svg { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 3; overflow: visible; }
 .trail-line { fill: none; stroke: #d9480f; stroke-width: 2.5; stroke-linecap: round; }
-.trail-line.trail-new { stroke-width: 3.5; stroke-dasharray: 8 5; animation: trailFlow 1s linear infinite; }
+.trail-line { pointer-events: stroke; }
+.trail-line.trail-new { stroke: #c62f2f; stroke-width: 3.5; stroke-dasharray: 8 5; animation: trailFlow 1s linear infinite; }
 @keyframes trailFlow { to { stroke-dashoffset: -13; } }
 .trail-move { fill: none; stroke: #c62f2f; stroke-width: 2; stroke-dasharray: 4 3; }
 .trail-from { fill: none; stroke: #c62f2f; stroke-width: 2; stroke-dasharray: 3 2; }

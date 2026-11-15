@@ -284,7 +284,9 @@ function getLocationMap() {
     recent.push({ at: at, ev: ev, from: from, to: to, part: String(e.part_code || ''), by: String(e.by || '') });
   });
   recent.sort(function (a, b) { return a.at < b.at ? 1 : a.at > b.at ? -1 : 0; });
-  return { today: today, map: map, recent: recent.slice(0, 30) };
+  // การย้ายของ 10 ครั้งล่าสุด (นับย้อนหลังไปเรื่อยๆ ไม่จำกัดวัน) — ใช้วาดลูกศรบนผัง
+  const moves = recent.filter(function (e) { return e.ev === 'move' && e.from && e.to && e.from !== e.to; }).slice(0, 10);
+  return { today: today, map: map, recent: recent.slice(0, 30), moves: moves };
 }
 
 /** ลำดับการเคลื่อนไหว (บันทึก / แก้ยอด / ย้าย / ลบ) ของช่วงวันทำงาน + กะ + คน — ใช้เล่นย้อนหลังในหน้าผัง (เก่า → ใหม่) */
