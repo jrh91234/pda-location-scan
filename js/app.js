@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261115-1517'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261115-1523'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -1972,8 +1972,85 @@ function closePhotos() { openPhotos.current = null; closeModal(); }
 
 function viewPhoto(src, scanId, row) {
   openPhotos.current = null;
-  openModal('<img class="photo-full" src="' + src + '" alt=""><div class="actions"><button class="btn" id="mBack">กลับ</button></div>');
+  openModal('<div class="zoom-box" id="zBox"><img class="zoom-img" id="zImg" src="' + src + '" alt="" draggable="false"></div>' +
+    '<div class="zoom-bar"><button class="btn small" id="zOut" aria-label="ซูมออก">➖</button><span id="zPct" class="muted small">100%</span>' +
+    '<button class="btn small" id="zIn" aria-label="ซูมเข้า">➕</button><button class="btn small" id="zReset">พอดีจอ</button></div>' +
+    '<p class="muted small center">ใช้สองนิ้วถ่าง หรือแตะสองครั้งเพื่อซูม · ลากเพื่อเลื่อนดู</p>' +
+    '<div class="actions"><button class="btn" id="mBack">กลับ</button></div>');
   $('mBack').onclick = function () { openPhotos(scanId, row); };
+  setupZoom($('zBox'), $('zImg'));
+}
+
+// ซูมรูป: สองนิ้วถ่าง / แตะสองครั้ง / ปุ่ม +- / ล้อเมาส์ · ลากเลื่อนเมื่อซูมอยู่
+function setupZoom(box, img) {
+  var z = 1, x = 0, y = 0, MAX = 6, pts = {}, start = null, lastTap = 0;
+  function clamp() {
+    var w = box.clientWidth, h = box.clientHeight;
+    var mx = (w * z - w) / 2, my = (h * z - h) / 2;
+    x = Math.max(-mx, Math.min(mx, x)); y = Math.max(-my, Math.min(my, y));
+  }
+  function apply(anim) {
+    if (z <= 1) { z = 1; x = 0; y = 0; }
+    clamp();
+    img.style.transition = anim ? 'transform .2s' : 'none';
+    img.style.transform = 'translate(' + x + 'px,' + y + 'px) scale(' + z + ')';
+    box.classList.toggle('zoomed', z > 1);
+    if ($('zPct')) $('zPct').textContent = Math.round(z * 100) + '%';
+  }
+  // ซูมโดยให้จุด (cx, cy) บนจอค้างอยู่ที่เดิม
+  function zoomAt(nz, cx, cy, anim) {
+    nz = Math.max(1, Math.min(MAX, nz));
+    var r = box.getBoundingClientRect();
+    var px = cx - r.left - r.width / 2, py = cy - r.top - r.height / 2;
+    x = px - (px - x) * nz / z; y = py - (py - y) * nz / z; z = nz;
+    apply(anim);
+  }
+  function center() { var r = box.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }
+  $('zIn').onclick = function () { var c = center(); zoomAt(z * 1.6, c[0], c[1], true); };
+  $('zOut').onclick = function () { var c = center(); zoomAt(z / 1.6, c[0], c[1], true); };
+  $('zReset').onclick = function () { z = 1; apply(true); };
+  box.addEventListener('wheel', function (e) { e.preventDefault(); zoomAt(z * (e.deltaY < 0 ? 1.2 : 1 / 1.2), e.clientX, e.clientY); }, { passive: false });
+  box.addEventListener('pointerdown', function (e) {
+    box.setPointerCapture(e.pointerId);
+    pts[e.pointerId] = [e.clientX, e.clientY];
+    var ids = Object.keys(pts);
+    if (ids.length === 2) {
+      var a = pts[ids[0]], b = pts[ids[1]];
+      start = { d: Math.hypot(a[0] - b[0], a[1] - b[1]), z: z, x: x, y: y, cx: (a[0] + b[0]) / 2, cy: (a[1] + b[1]) / 2 };
+    } else if (ids.length === 1) {
+      start = { px: e.clientX, py: e.clientY, x: x, y: y, moved: false };
+    }
+  });
+  box.addEventListener('pointermove', function (e) {
+    if (!pts[e.pointerId] || !start) return;
+    pts[e.pointerId] = [e.clientX, e.clientY];
+    var ids = Object.keys(pts);
+    if (ids.length === 2 && start.d) {
+      var a = pts[ids[0]], b = pts[ids[1]];
+      var d = Math.hypot(a[0] - b[0], a[1] - b[1]);
+      z = start.z; x = start.x; y = start.y;
+      zoomAt(start.z * d / start.d, start.cx, start.cy);
+      x += (a[0] + b[0]) / 2 - start.cx; y += (a[1] + b[1]) / 2 - start.cy; apply();
+    } else if (ids.length === 1 && start.px !== undefined) {
+      var dx = e.clientX - start.px, dy = e.clientY - start.py;
+      if (Math.abs(dx) + Math.abs(dy) > 6) start.moved = true;
+      if (z > 1) { x = start.x + dx; y = start.y + dy; apply(); }
+    }
+  });
+  function up(e) {
+    var wasTap = start && start.px !== undefined && !start.moved && Object.keys(pts).length === 1;
+    delete pts[e.pointerId];
+    if (wasTap && e.type === 'pointerup') {
+      var now = Date.now();
+      if (now - lastTap < 320) { if (z > 1) { z = 1; apply(true); } else zoomAt(2.5, e.clientX, e.clientY, true); lastTap = 0; }
+      else lastTap = now;
+    }
+    var ids = Object.keys(pts);
+    start = ids.length === 1 ? { px: pts[ids[0]][0], py: pts[ids[0]][1], x: x, y: y, moved: true } : null;
+  }
+  box.addEventListener('pointerup', up);
+  box.addEventListener('pointercancel', up);
+  apply();
 }
 
 function deletePhotoUi(id, scanId, row) {
