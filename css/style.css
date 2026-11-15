@@ -383,3 +383,11 @@ button.loc-pill { border: 1px solid var(--blue); font-family: inherit; font-size
 .lg-trail::after { content: ''; position: absolute; right: -2px; top: -6px; border: 5px solid transparent; border-left: 7px solid #d9480f; border-right: 0; }
 .trail-badge { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; border-radius: 50%; background: #c62f2f; color: #fff; font-size: 10px; font-weight: 700; font-style: normal; }
 #mapTrail.active { background: #fff1e8; border-color: #d9480f; color: #d9480f; }
+
+/* รูปในรายละเอียดช่อง (หน้าผัง) */
+.cell-photos { display: flex; gap: 6px; overflow-x: auto; margin: 6px 0 2px; padding-bottom: 2px; }
+.cell-photos img { flex: none; width: 72px; height: 72px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); background: #eef1f5; cursor: zoom-in; }
+.cell-photos img.loading { animation: cpPulse 1s ease-in-out infinite alternate; }
+.cell-photos img.fail { opacity: .4; cursor: default; }
+@keyframes cpPulse { from { opacity: .5; } to { opacity: 1; } }
+@media (min-width: 1000px) { .cell-photos img { width: 96px; height: 96px; } }

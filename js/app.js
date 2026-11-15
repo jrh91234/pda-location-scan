@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261115-2135'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261115-2139'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -2112,15 +2112,33 @@ function openMapCell(code) {
   api('listScans', { location: code, limit: 200 }).then(function (d) {
     var el = $('cellOut'); if (!el) return;
     var rows = d.rows.filter(function (r) { return r.location === code; });
+    var byId = {};
+    local.concat(rows).forEach(function (r) { byId[r.scan_id] = r; });
+    function thumbs(r) {
+      var ids = photosFor(r.scan_id, r);
+      return ids.length ? '<div class="cell-photos">' + ids.map(function (id) {
+        return '<img class="loading" data-cpid="' + esc(id) + '" data-sid="' + esc(r.scan_id) + '" alt="">';
+      }).join('') + '</div>' : '';
+    }
     var items = local.map(function (r) {
-      return '<div class="row"><div class="row-main"><div class="row-top"><b class="part">' + esc(r.part_code || r.qr_raw) + '</b><span class="tag pending">รอส่ง</span></div>' + itemLines(r) + '</div></div>';
+      return '<div class="row"><div class="row-main"><div class="row-top"><b class="part">' + esc(r.part_code || r.qr_raw) + '</b><span class="tag pending">รอส่ง</span></div>' + itemLines(r) + thumbs(r) + '</div></div>';
     }).concat(rows.map(function (r) {
-      return '<div class="row"><div class="row-main"><div class="row-top">' + partLink(r, true) + '</div>' + itemLines(r) +
+      return '<div class="row"><div class="row-main"><div class="row-top">' + partLink(r, true) + '</div>' + itemLines(r) + thumbs(r) +
         '<div class="row-sub muted small"><span>' + fmtWhen(r.scanned_at) + '</span><span>👤 ' + esc(r.scanned_by) + '</span></div></div></div>';
     }));
     el.className = '';
     el.innerHTML = items.length ? '<p class="muted small">' + items.length + ' กล่อง</p>' + items.join('') : '<div class="empty-list muted">ยังไม่มีของในช่องนี้</div>';
     bindTimelineLinks(el);
+    // รูปของแต่ละกล่อง: โหลดทีละรูป · แตะเพื่อดูเต็มจอ/ซูม แล้ว "กลับ" มาหน้าช่องนี้
+    Array.prototype.forEach.call(el.querySelectorAll('img[data-cpid]'), function (img) {
+      loadPhoto(img.getAttribute('data-cpid')).then(function (data) { img.classList.remove('loading'); if (data) img.src = data; else img.classList.add('fail'); },
+        function () { img.classList.remove('loading'); img.classList.add('fail'); });
+      img.onclick = function () {
+        if (!img.src) return;
+        var sid = img.getAttribute('data-sid');
+        viewPhoto(img.src, sid, byId[sid], function () { openMapCell(code); });
+      };
+    });
   }, function (err) {
     var el = $('cellOut'); if (el) { el.className = 'msg err'; el.textContent = err.message; }
   });
@@ -2414,14 +2432,14 @@ function openPhotos(scanId, row) {
 
 function closePhotos() { openPhotos.current = null; closeModal(); }
 
-function viewPhoto(src, scanId, row) {
+function viewPhoto(src, scanId, row, back) {
   openPhotos.current = null;
   openModal('<div class="zoom-box" id="zBox"><img class="zoom-img" id="zImg" src="' + src + '" alt="" draggable="false"></div>' +
     '<div class="zoom-bar"><button class="btn small" id="zOut" aria-label="ซูมออก">➖</button><span id="zPct" class="muted small">100%</span>' +
     '<button class="btn small" id="zIn" aria-label="ซูมเข้า">➕</button><button class="btn small" id="zReset">พอดีจอ</button></div>' +
     '<p class="muted small center">ใช้สองนิ้วถ่าง หรือแตะสองครั้งเพื่อซูม · ลากเพื่อเลื่อนดู</p>' +
     '<div class="actions"><button class="btn" id="mBack">กลับ</button></div>');
-  $('mBack').onclick = function () { openPhotos(scanId, row); };
+  $('mBack').onclick = function () { if (back) back(); else openPhotos(scanId, row); };
   setupZoom($('zBox'), $('zImg'));
 }
 
