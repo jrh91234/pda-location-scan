@@ -231,10 +231,16 @@ function listScans(filter) {
   const photos = photosByScan_();
   const out = [];
   let total = 0;
-  const locs = {}, parts = {}, users = [];
+  const locs = {}, parts = {}, users = [], lotIdx = {}, lots = [];
   for (let i = rows.length - 1; i >= 0; i--) {
     const r = rows[i];
     if (r.scanned_by && users.indexOf(r.scanned_by) < 0) users.push(r.scanned_by); // รายชื่อผู้บันทึกทั้งหมด ล่าสุดก่อน (วนจากท้ายชีต)
+    // รายการ Lot ที่มีในระบบ (ล่าสุดก่อน) — ใช้แนะนำตอนพิมพ์ค้นหา: [lot, รหัสสินค้า, จำนวนกล่อง]
+    const lotNo = String(r.lot_no || '');
+    if (lotNo && r.status !== 'deleted') {
+      if (lotNo in lotIdx) lots[lotIdx[lotNo]][2]++;
+      else if (lots.length < 3000) { lotIdx[lotNo] = lots.length; lots.push([lotNo, r.part_code, 1]); }
+    }
     if (!filter.includeDeleted && r.status === 'deleted') continue;
     if (from || to || shift) {
       const ws = workShift_(r.scanned_at);
@@ -252,7 +258,7 @@ function listScans(filter) {
     }
     if (out.length < limit) { r.photos = photos[r.scan_id] || []; out.push(r); }
   }
-  return { rows: out, total: total, partCount: Object.keys(parts).length, locationCount: Object.keys(locs).length, users: users.slice(0, 200) };
+  return { rows: out, total: total, partCount: Object.keys(parts).length, locationCount: Object.keys(locs).length, users: users.slice(0, 200), lots: lots };
 }
 
 /** สรุปต่อ Location สำหรับหน้าผัง: จำนวนกล่องที่ใช้งานอยู่ / สแกนวันนี้ / สแกนล่าสุดเมื่อไหร่ โดยใคร */

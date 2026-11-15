@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261115-2145'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261115-2151'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -18,7 +18,7 @@ var S = {
   photoSyncing: false,
   photoCache: {},
   msg: null,
-  hist: { filter: { dateFrom: '', dateTo: '', shift: '', location: '', user: '', q: '', includeDeleted: false }, auto: true, users: storeJson('pda_users') || [], data: null, loading: false, error: '' }
+  hist: { filter: { dateFrom: '', dateTo: '', shift: '', location: '', user: '', q: '', includeDeleted: false }, auto: true, users: storeJson('pda_users') || [], lots: storeJson('pda_lots') || [], data: null, loading: false, error: '' }
 };
 
 // ---------- helpers ----------
@@ -823,12 +823,14 @@ function renderHistory() {
       '<div class="seg shift-seg">' + [['', 'ทุกกะ'], ['day', '☀️ กะเช้า'], ['night', '🌙 กะดึก']].map(function (o) {
         return '<button type="button" data-shift="' + o[0] + '" class="' + (f.shift === o[0] ? 'active' : '') + '">' + o[1] + '</button>';
       }).join('') + '</div>' +
-      '<div class="seg quick-seg"><button type="button" data-quick="today">วันนี้</button><button type="button" data-quick="yesterday">เมื่อวาน</button>' +
-        '<button type="button" data-quick="7">7 วัน</button><button type="button" data-quick="all">ทั้งหมด</button></div>' +
+      '<div class="seg quick-seg">' + [['today', 'วันนี้'], ['yesterday', 'เมื่อวาน'], ['7', '7 วัน'], ['all', 'ทั้งหมด']].map(function (o) {
+        return '<button type="button" data-quick="' + o[0] + '" class="' + (histQuickOf(f) === o[0] ? 'active' : '') + '">' + o[1] + '</button>';
+      }).join('') + '</div>' +
       '<p class="muted small span2">วันทำงานตัดรอบ 08:00 – 07:59 ของอีกวัน · กะเช้า 08:00–19:59 · กะดึก 20:00–07:59 (สแกนตี 3 ของวันที่ 16 = วันที่ 15 กะดึก)</p>' +
       '<input id="fLoc" class="field" placeholder="Location (เช่น CO-01)" value="' + esc(f.location) + '">' +
       '<select id="fUser" class="field">' + userOptions(f.user) + '</select>' +
-      '<input id="fQ" class="field" placeholder="ค้นหา รหัส / ชื่อ / Spec / Lot" value="' + esc(f.q) + '">' +
+      '<div class="ac-wrap"><input id="fQ" class="field" placeholder="ค้นหา รหัส / ชื่อ / Spec / Lot (พิมพ์บางส่วนได้)" autocomplete="off" value="' + esc(f.q) + '">' +
+        '<div id="fQSug" class="ac-list hidden"></div></div>' +
       '<label class="radio"><input type="checkbox" id="fDel"' + (f.includeDeleted ? ' checked' : '') + '> แสดงรายการที่ลบแล้ว</label>' +
       '<button class="btn primary" id="fGo">ค้นหา</button>' +
       '<button class="btn export-btn" id="fXlsx">⬇️ Export Excel (ตามตัวกรอง)</button>' +
@@ -836,6 +838,8 @@ function renderHistory() {
     '<div id="histOut"></div>';
   $('fGo').onclick = function () {
     S.hist.filter = readHistFilter(); S.hist.auto = false;
+    var qk = histQuickOf(S.hist.filter);
+    Array.prototype.forEach.call(document.querySelectorAll('[data-quick]'), function (x) { x.classList.toggle('active', x.getAttribute('data-quick') === qk); });
     loadHistory();
   };
   $('fXlsx').onclick = exportExcel;
@@ -852,15 +856,97 @@ function renderHistory() {
       if (q === 'today') { $('fFrom').value = $('fTo').value = t; }
       else if (q === 'yesterday') { d.setDate(d.getDate() - 1); $('fFrom').value = $('fTo').value = ymd(d); }
       else if (q === '7') { d.setDate(d.getDate() - 6); $('fFrom').value = ymd(d); $('fTo').value = t; }
-      else { $('fFrom').value = $('fTo').value = ''; }
+      else {
+        // ทั้งหมด = ทุกวัน + ทุกกะ
+        $('fFrom').value = $('fTo').value = '';
+        Array.prototype.forEach.call(document.querySelectorAll('[data-shift]'), function (x) { x.classList.toggle('active', x.getAttribute('data-shift') === ''); });
+      }
       $('fGo').click();
     };
   });
   $('fUser').onchange = function () { $('fGo').click(); };
-  ['fLoc', 'fQ'].forEach(function (id) {
-    $(id).addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); $('fGo').click(); } });
-  });
+  $('fLoc').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); $('fGo').click(); } });
+  bindHistSuggest();
   if (S.hist.data) renderHistoryList(); else loadHistory();
+}
+
+// ปุ่มลัดช่วงวันที่ที่ตรงกับตัวกรองปัจจุบัน
+function histQuickOf(f) {
+  var t = workDay(), d = new Date(t + 'T12:00:00');
+  function ymd(x) { return x.getFullYear() + '-' + pad(x.getMonth() + 1) + '-' + pad(x.getDate()); }
+  if (!f.dateFrom && !f.dateTo) return f.shift ? '' : 'all';
+  if (f.dateFrom === t && f.dateTo === t) return 'today';
+  d.setDate(d.getDate() - 1); if (f.dateFrom === ymd(d) && f.dateTo === ymd(d)) return 'yesterday';
+  d.setDate(d.getDate() - 5); if (f.dateFrom === ymd(d) && f.dateTo === t) return '7';
+  return '';
+}
+
+// ช่องค้นหา: แนะนำ Lot ที่มีในระบบ (พิมพ์บางส่วนได้) + รหัสสินค้าจาก BOM
+function histLotList() {
+  var seen = {}, out = [];
+  S.recent.forEach(function (r) { if (r.lot_no && r.status !== 'deleted' && !seen[r.lot_no]) { seen[r.lot_no] = 1; out.push([String(r.lot_no), r.part_code, 0]); } });
+  S.hist.lots.forEach(function (l) { if (!seen[l[0]]) { seen[l[0]] = 1; out.push(l); } else out.forEach(function (o) { if (o[0] === l[0]) o[2] = l[2]; }); });
+  return out;
+}
+function histSuggestList(q) {
+  q = String(q || '').trim().toUpperCase(); if (!q) return [];
+  var pre = [], mid = [];
+  histLotList().forEach(function (l) {
+    var i = l[0].toUpperCase().indexOf(q);
+    if (i === 0) pre.push(l); else if (i > 0) mid.push(l);
+  });
+  var lots = pre.concat(mid).slice(0, 8).map(function (l) { return { kind: 'lot', value: l[0], part: l[1], n: l[2] }; });
+  var parts = q.length >= 2 ? suggestParts(q, lots.length >= 6 ? 3 : 6).map(function (c) { return { kind: 'part', value: c }; }) : [];
+  return lots.concat(parts);
+}
+function bindHistSuggest() {
+  var inp = $('fQ'), box = $('fQSug'); if (!inp || !box) return;
+  function hide() { box.classList.add('hidden'); box.innerHTML = ''; }
+  function pick(v) { inp.value = v; hide(); $('fGo').click(); }
+  function show() {
+    var q = inp.value, list = histSuggestList(q);
+    if (!list.length || (list.length === 1 && list[0].value.toUpperCase() === q.trim().toUpperCase())) { hide(); return; }
+    box.innerHTML = list.map(function (it, i) {
+      var b = it.kind === 'part' ? (window.BOM[it.value] || ['', '']) : (bomInfo(it.part) || {});
+      return '<button type="button" class="ac-item' + (i === 0 ? ' active' : '') + '" data-v="' + esc(it.value) + '">' +
+        (it.kind === 'lot'
+          ? '<span class="ac-code"><span class="ac-kind">Lot</span> ' + markQ(it.value, q) + '</span>' +
+            '<span class="ac-name">' + esc(it.part || '') + (b.name ? ' · ' + esc(b.name) : '') + (it.n ? ' · ' + it.n + ' กล่อง' : '') + '</span>'
+          : '<span class="ac-code"><span class="ac-kind part">รหัส</span> ' + markQ(it.value, q) + '</span>' +
+            (b[0] ? '<span class="ac-name">' + markQ(b[0], q) + '</span>' : '') + (b[1] ? '<span class="ac-spec">' + markQ(b[1], q) + '</span>' : '')) +
+        '</button>';
+    }).join('');
+    box.classList.remove('hidden');
+    Array.prototype.forEach.call(box.querySelectorAll('.ac-item'), function (b) {
+      b.onmousedown = function (e) { e.preventDefault(); };
+      b.onclick = function () { pick(b.getAttribute('data-v')); };
+    });
+  }
+  function move(d) {
+    var items = Array.prototype.slice.call(box.querySelectorAll('.ac-item')); if (!items.length) return false;
+    var i = items.findIndex(function (x) { return x.classList.contains('active'); });
+    i = (i + d + items.length) % items.length;
+    items.forEach(function (x, k) { x.classList.toggle('active', k === i); });
+    items[i].scrollIntoView({ block: 'nearest' });
+    return true;
+  }
+  inp.addEventListener('input', show);
+  inp.addEventListener('focus', function () { if (inp.value.trim()) show(); });
+  inp.addEventListener('blur', function () { setTimeout(hide, 150); });
+  inp.addEventListener('keydown', function (e) {
+    var open = !box.classList.contains('hidden');
+    if (e.key === 'ArrowDown' && open) { e.preventDefault(); move(1); }
+    else if (e.key === 'ArrowUp' && open) { e.preventDefault(); move(-1); }
+    else if (e.key === 'Escape') hide();
+    else if (e.key === 'Enter') {
+      e.preventDefault();
+      var a = open && box.querySelector('.ac-item.active');
+      // Enter = ค้นหาตามที่พิมพ์ (บางส่วนก็ได้) · เลือกรายการด้วยลูกศรแล้ว Enter = ใช้รายการนั้น
+      if (a && move.used) pick(a.getAttribute('data-v')); else { hide(); $('fGo').click(); }
+      move.used = false;
+    }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') move.used = true;
+  });
 }
 
 // dropdown ผู้บันทึก: ทุกคน + ชื่อจากประวัติ (ล่าสุดก่อน) — ชื่อที่เลือกอยู่แต่ไม่อยู่ในรายการก็ยังแสดง
@@ -951,6 +1037,7 @@ function loadHistory() {
   S.hist.loading = true; S.hist.error = ''; renderHistoryList();
   api('listScans', Object.assign({ limit: 300 }, S.hist.filter)).then(function (d) {
     S.online = true; S.hist.data = d; S.hist.loading = false;
+    if (d.lots) { S.hist.lots = d.lots; storeJson('pda_lots', d.lots); }
     if (d.users && d.users.join('|') !== S.hist.users.join('|')) {
       S.hist.users = d.users; storeJson('pda_users', d.users);
       if ($('fUser')) $('fUser').innerHTML = userOptions($('fUser').value);
