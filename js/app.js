@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261115-1456'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261115-1459'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -18,7 +18,7 @@ var S = {
   photoSyncing: false,
   photoCache: {},
   msg: null,
-  hist: { filter: { dateFrom: workDay(), dateTo: workDay(), shift: '', location: '', user: '', q: '', includeDeleted: false }, data: null, loading: false, error: '' }
+  hist: { filter: { dateFrom: '', dateTo: '', shift: '', location: '', user: '', q: '', includeDeleted: false }, auto: true, users: storeJson('pda_users') || [], data: null, loading: false, error: '' }
 };
 
 // ---------- helpers ----------
@@ -37,6 +37,7 @@ function workDay(d) {
   if (d.getHours() < WD_DAY_START) d.setDate(d.getDate() - 1);
   return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
 }
+function currentShift() { var h = new Date().getHours(); return h >= WD_DAY_START && h < WD_NIGHT_START ? 'day' : 'night'; }
 function shiftOf(at) { // 'yyyy-MM-dd HH:mm:ss' → { date, shift }
   var m = String(at || '').match(/^(\d{4})-(\d\d)-(\d\d) (\d\d)/);
   if (!m) return { date: '', shift: '' };
@@ -783,6 +784,11 @@ function openDeleteModal(rec, onDone) {
 
 // ======================= หน้าประวัติ =======================
 function renderHistory() {
+  // ยังไม่ได้เลือกตัวกรองเอง → ใช้วันทำงานและกะปัจจุบัน (อัปเดตทุกครั้งที่เข้าหน้านี้ เผื่อข้ามกะ)
+  if (S.hist.auto) {
+    var wd = workDay(), cs = currentShift(), cf = S.hist.filter;
+    if (cf.dateFrom !== wd || cf.dateTo !== wd || cf.shift !== cs) { cf.dateFrom = cf.dateTo = wd; cf.shift = cs; S.hist.data = null; }
+  }
   var f = S.hist.filter;
   $('main').innerHTML =
     '<section class="filters">' +
@@ -795,7 +801,7 @@ function renderHistory() {
         '<button type="button" data-quick="7">7 วัน</button><button type="button" data-quick="all">ทั้งหมด</button></div>' +
       '<p class="muted small span2">วันทำงานตัดรอบ 08:00 – 07:59 ของอีกวัน · กะเช้า 08:00–19:59 · กะดึก 20:00–07:59 (สแกนตี 3 ของวันที่ 16 = วันที่ 15 กะดึก)</p>' +
       '<input id="fLoc" class="field" placeholder="Location (เช่น CO-01)" value="' + esc(f.location) + '">' +
-      '<input id="fUser" class="field" placeholder="ผู้สแกน" value="' + esc(f.user) + '">' +
+      '<select id="fUser" class="field">' + userOptions(f.user) + '</select>' +
       '<input id="fQ" class="field" placeholder="ค้นหา รหัสสินค้า / Lot / QR" value="' + esc(f.q) + '">' +
       '<label class="radio"><input type="checkbox" id="fDel"' + (f.includeDeleted ? ' checked' : '') + '> แสดงรายการที่ลบแล้ว</label>' +
       '<button class="btn primary" id="fGo">ค้นหา</button>' +
@@ -803,7 +809,7 @@ function renderHistory() {
     '</section>' +
     '<div id="histOut"></div>';
   $('fGo').onclick = function () {
-    S.hist.filter = readHistFilter();
+    S.hist.filter = readHistFilter(); S.hist.auto = false;
     loadHistory();
   };
   $('fXlsx').onclick = exportExcel;
@@ -824,17 +830,27 @@ function renderHistory() {
       $('fGo').click();
     };
   });
-  ['fLoc', 'fUser', 'fQ'].forEach(function (id) {
+  $('fUser').onchange = function () { $('fGo').click(); };
+  ['fLoc', 'fQ'].forEach(function (id) {
     $(id).addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); $('fGo').click(); } });
   });
   if (S.hist.data) renderHistoryList(); else loadHistory();
+}
+
+// dropdown ผู้บันทึก: ทุกคน + ชื่อจากประวัติ (ล่าสุดก่อน) — ชื่อที่เลือกอยู่แต่ไม่อยู่ในรายการก็ยังแสดง
+function userOptions(sel) {
+  var names = S.hist.users.slice();
+  if (sel && names.indexOf(sel) < 0) names.unshift(sel);
+  return '<option value="">👤 ผู้บันทึก: ทุกคน</option>' + names.map(function (n) {
+    return '<option value="' + esc(n) + '"' + (n === sel ? ' selected' : '') + '>' + esc(n) + '</option>';
+  }).join('');
 }
 
 function readHistFilter() {
   var sh = document.querySelector('[data-shift].active');
   var from = $('fFrom').value, to = $('fTo').value;
   if (from && to && from > to) { var t = from; from = to; to = t; $('fFrom').value = from; $('fTo').value = to; }
-  return { dateFrom: from, dateTo: to, shift: sh ? sh.getAttribute('data-shift') : '', location: $('fLoc').value.trim().toUpperCase(), user: $('fUser').value.trim(),
+  return { dateFrom: from, dateTo: to, shift: sh ? sh.getAttribute('data-shift') : '', location: $('fLoc').value.trim().toUpperCase(), user: $('fUser').value, userExact: true,
     q: $('fQ').value.trim(), includeDeleted: $('fDel').checked };
 }
 
@@ -905,7 +921,12 @@ function exportExcel() {
 function loadHistory() {
   S.hist.loading = true; S.hist.error = ''; renderHistoryList();
   api('listScans', Object.assign({ limit: 300 }, S.hist.filter)).then(function (d) {
-    S.online = true; S.hist.data = d; S.hist.loading = false; renderHistoryList(); refreshHeader();
+    S.online = true; S.hist.data = d; S.hist.loading = false;
+    if (d.users && d.users.join('|') !== S.hist.users.join('|')) {
+      S.hist.users = d.users; storeJson('pda_users', d.users);
+      if ($('fUser')) $('fUser').innerHTML = userOptions($('fUser').value);
+    }
+    renderHistoryList(); refreshHeader();
   }, function (err) {
     if (err.network) S.online = false;
     S.hist.loading = false; S.hist.error = err.message; renderHistoryList(); refreshHeader();

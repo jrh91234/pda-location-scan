@@ -228,9 +228,10 @@ function listScans(filter) {
   const photos = photosByScan_();
   const out = [];
   let total = 0;
-  const locs = {}, parts = {};
+  const locs = {}, parts = {}, users = [];
   for (let i = rows.length - 1; i >= 0; i--) {
     const r = rows[i];
+    if (r.scanned_by && users.indexOf(r.scanned_by) < 0) users.push(r.scanned_by); // รายชื่อผู้บันทึกทั้งหมด ล่าสุดก่อน (วนจากท้ายชีต)
     if (!filter.includeDeleted && r.status === 'deleted') continue;
     if (from || to || shift) {
       const ws = workShift_(r.scanned_at);
@@ -239,7 +240,7 @@ function listScans(filter) {
       if (shift && ws.shift !== shift) continue;
     }
     if (loc && r.location.indexOf(loc) !== 0) continue;
-    if (user && r.scanned_by.toLowerCase().indexOf(user) < 0) continue;
+    if (user && (filter.userExact ? r.scanned_by.toLowerCase() !== user : r.scanned_by.toLowerCase().indexOf(user) < 0)) continue;
     if (q && (r.qr_raw + ' ' + r.part_code + ' ' + r.lot_no).toLowerCase().indexOf(q) < 0) continue;
     if (r.status !== 'deleted') {
       total++;
@@ -248,7 +249,7 @@ function listScans(filter) {
     }
     if (out.length < limit) { r.photos = photos[r.scan_id] || []; out.push(r); }
   }
-  return { rows: out, total: total, partCount: Object.keys(parts).length, locationCount: Object.keys(locs).length };
+  return { rows: out, total: total, partCount: Object.keys(parts).length, locationCount: Object.keys(locs).length, users: users.slice(0, 200) };
 }
 
 /** สรุปต่อ Location สำหรับหน้าผัง: จำนวนกล่องที่ใช้งานอยู่ / สแกนวันนี้ / สแกนล่าสุดเมื่อไหร่ โดยใคร */
