@@ -284,9 +284,16 @@ function getLocationMap() {
     recent.push({ at: at, ev: ev, from: from, to: to, part: String(e.part_code || ''), by: String(e.by || '') });
   });
   recent.sort(function (a, b) { return a.at < b.at ? 1 : a.at > b.at ? -1 : 0; });
-  // การย้ายของ 10 ครั้งล่าสุด (นับย้อนหลังไปเรื่อยๆ ไม่จำกัดวัน) — ใช้วาดลูกศรบนผัง
-  const moves = recent.filter(function (e) { return e.ev === 'move' && e.from && e.to && e.from !== e.to; }).slice(0, 10);
-  return { today: today, map: map, recent: recent.slice(0, 30), moves: moves };
+  // 10 Action ล่าสุด (บันทึก / ย้าย / แก้ยอด / ลบ) นับย้อนหลังไม่จำกัดวัน — ใช้วาดลูกศรบนผัง
+  // Action ที่ช่องเดียวกันติดกัน (เช่น สแกนหลายกล่องลงช่องเดิม) รวมเป็น 1 จุด (n = จำนวน)
+  const actions = [];
+  for (let i = 0; i < recent.length && actions.length <= 10; i++) {
+    const e = recent[i], loc = e.to || e.from, last = actions[actions.length - 1];
+    if (last && last.loc === loc && e.ev !== 'move' && last.ev !== 'move') { last.n++; last.first = e.at; continue; }
+    if (actions.length === 10) break;
+    actions.push({ at: e.at, first: e.at, ev: e.ev, from: e.from, to: e.to, loc: loc, part: e.part, by: e.by, n: 1 });
+  }
+  return { today: today, map: map, recent: recent.slice(0, 30), actions: actions };
 }
 
 /** ลำดับการเคลื่อนไหว (บันทึก / แก้ยอด / ย้าย / ลบ) ของช่วงวันทำงาน + กะ + คน — ใช้เล่นย้อนหลังในหน้าผัง (เก่า → ใหม่) */
