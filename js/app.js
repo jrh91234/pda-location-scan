@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261116-1810'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261116-1814'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -1977,7 +1977,7 @@ function mapAllItems() {
   var seen = {};
   var out = MAP.items.map(function (r) {
     seen[r[0] + '|' + r[1] + '|' + r[2] + '|' + r[3]] = 1;
-    return { loc: r[0], part: String(r[1] || ''), lot: String(r[2] || ''), at: r[3], qty: r[4], unit: r[5] };
+    return { loc: r[0], part: String(r[1] || ''), lot: String(r[2] || ''), at: r[3], qty: r[4], unit: r[5], by: String(r[6] || '') };
   });
   // รายการรอส่ง + ที่เครื่องนี้เพิ่งส่งขึ้นไปแต่ผังยังไม่ได้โหลดใหม่
   S.recent.forEach(function (r) {
@@ -1985,7 +1985,7 @@ function mapAllItems() {
     var part = String(r.part_code || r.qr_raw || ''), lot = String(r.lot_no || ''), at = bkkMin(r.scanned_at);
     if (r.status === 'saved' && seen[r.location + '|' + part + '|' + lot + '|' + at]) return;
     if (r.status === 'saved' && !MAP.items.length) return;
-    out.push({ loc: r.location, part: part, lot: lot, at: at, qty: r.qty, unit: r.unit, pending: r.status === 'pending' });
+    out.push({ loc: r.location, part: part, lot: lot, at: at, qty: r.qty, unit: r.unit, by: String(r.scanned_by || ''), pending: r.status === 'pending' });
   });
   return out;
 }
@@ -3125,7 +3125,8 @@ function kdFmt(n) { return n == null ? '—' : (Math.round(n * 1000) / 1000).toL
 
 // เทียบทั้งคลัง: ต่อช่อง → { st, keys:[{key, part, lot, k, a, eq}], nk, na, nd, marked }
 function kdCompute() {
-  var items = mapAllItems(), cnt = KD.count || {}, round = cnt.round, marks = cnt.marks || {};
+  // ไม่นับข้อมูลทดสอบ (ผู้บันทึกชื่อ ทดสอบ / test) — เหมือนตอน Export
+  var items = mapAllItems().filter(function (it) { return !isTestUser(it.by); }), cnt = KD.count || {}, round = cnt.round, marks = cnt.marks || {};
   var key = [KD.rows.length, KD.snapshotAt, KD.mode, MAP.itemsSig, items.length, JSON.stringify(round), Object.keys(marks).length, MAP.loadedAt].join('|');
   if (kdCompute.key === key && kdCompute.v) return kdCompute.v;
   var lot = KD.mode === 'lot', K = {}, A = {};

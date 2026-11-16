@@ -270,7 +270,7 @@ function getLocationMap(opt) {
   const map = {}, items = [];
   rows.forEach(function (r) {
     if (r.status === 'deleted' || !r.location) return;
-    items.push([r.location, r.part_code, r.lot_no, String(r.scanned_at).slice(0, 16), r.qty, r.unit]); // ใช้ค้นหาบนผัง + FIFO
+    items.push([r.location, r.part_code, r.lot_no, String(r.scanned_at).slice(0, 16), r.qty, r.unit, r.scanned_by]); // ใช้ค้นหาบนผัง + FIFO + เทียบ Kingdee (ตัดผู้ทดสอบ)
     const m = map[r.location] || (map[r.location] = { n: 0, today: 0, last: '', by: '' });
     m.n++;
     const at = r.edited_at > r.scanned_at ? r.edited_at : r.scanned_at;
