@@ -18,7 +18,7 @@ const MAX_BATCH = 50;
 // ======================= Web App =======================
 const API_ACTIONS = { ping: ping, saveScans: saveScans, listScans: listScans, deleteScan: deleteScan, updateQty: updateQty, updateLocation: updateLocation, findByQr: findByQr, getScans: getScans, getTimeline: getTimeline, getPartPackages: getPartPackages, getLocationMap: getLocationMap, getLocationEvents: getLocationEvents,
   uploadPhoto: uploadPhoto, getPhoto: getPhoto, deletePhoto: deletePhoto,
-  getCountState: getCountState, setCountRound: setCountRound, markBinCounted: markBinCounted };
+  getCountState: getCountState, setCountRound: setCountRound, markBinCounted: markBinCounted, getKingdeeMoves: getKingdeeMoves };
 
 function doPost(e) {
   let out;
@@ -759,4 +759,170 @@ function markBinCounted(loc, done, by) {
   const sh = markSheet_();
   sh.getRange(sh.getLastRow() + 1, 1, 1, MARK_HEADERS.length).setValues([[fmt_(new Date()), loc, done ? 1 : 0, clean_(by, 60)]]);
   return getCountState();
+}
+
+
+// ======================= ความเคลื่อนไหว Kingdee =======================
+// ตัวตั้งเวลา (ทุก 10 นาที) ดึงยอด Kingdee จาก OnHand-Inventory-Planner → เทียบกับรอบก่อน → บันทึกส่วนที่เปลี่ยนลงชีต KingdeeMoves
+// ครั้งแรก: เปิด Apps Script editor → เลือกฟังก์ชัน setupKingdeeTrigger → Run → อนุญาตสิทธิ์ (ดึง URL ภายนอก + ตั้งเวลา)
+const KD_SOURCE_URL = 'https://somrudeebanthao09.github.io/OnHand-Inventory-Planner/OnHandSeed.js';
+const KD_SNAP_SHEET = 'KingdeeSnap';
+const KD_SNAP_HEADERS = ['key', 'location', 'part_code', 'lot_no', 'qty', 'unit', 'part_name'];
+const KD_MOVE_SHEET = 'KingdeeMoves';
+const KD_MOVE_HEADERS = ['at', 'type', 'part_code', 'lot_no', 'location_from', 'location_to', 'qty', 'unit', 'part_name', 'detected_at'];
+const KD_BIN_RE = /^[A-Z]{2}-\d{2}-\d{2}[A-Z]$/;
+
+/** รันครั้งเดียวจาก editor: ขอสิทธิ์ + ตั้งเวลาดึงทุก 10 นาที + ดึงรอบแรก */
+function setupKingdeeTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'kingdeePoll') ScriptApp.deleteTrigger(t); });
+  ScriptApp.newTrigger('kingdeePoll').timeBased().everyMinutes(10).create();
+  return kingdeePoll();
+}
+
+function kdSheet_(name, headers) {
+  const ss = book_();
+  let sh = ss.getSheetByName(name);
+  if (!sh) sh = ss.insertSheet(name);
+  if (sh.getLastRow() === 0) {
+    sh.getRange(1, 1, 1, headers.length).setValues([headers]);
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+
+/** ดึงยอดล่าสุด → เทียบรอบก่อน → บันทึกความเคลื่อนไหว (ตัวตั้งเวลาเรียกทุก 10 นาที) */
+function kingdeePoll() {
+  const props = PropertiesService.getScriptProperties();
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(20000)) return { skipped: 'busy' };
+  try {
+    const res = UrlFetchApp.fetch(KD_SOURCE_URL + '?t=' + Date.now(), { muteHttpExceptions: true });
+    props.setProperty('KD_LAST_POLL', fmt_(new Date()));
+    if (res.getResponseCode() !== 200) throw new Error('HTTP ' + res.getResponseCode());
+    const text = res.getContentText();
+    const d = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
+    const snapAt = d.snapshotAt ? fmt_(new Date(d.snapshotAt)) : fmt_(new Date());
+    if (snapAt === props.getProperty('KD_SNAP_AT')) { props.deleteProperty('KD_POLL_ERR'); return { skipped: 'same snapshot', snapAt: snapAt }; }
+    // ยอดปัจจุบัน: รวมตาม ช่อง|รหัส|Lot
+    const cur = {};
+    (d.inventory || []).forEach(function (r) {
+      const loc = String(r.storage || '').trim(); if (!KD_BIN_RE.test(loc)) return;
+      const q = Number(r.onHandQty != null ? r.onHandQty : r.onHand) || 0; if (!q) return;
+      const part = String(r.partCode || r.materialCode || '').trim(), lot = String(r.lotNumber || '').trim();
+      const k = loc + '|' + part + '|' + lot;
+      const e = cur[k] || (cur[k] = { loc: loc, part: part, lot: lot, q: 0, unit: String(r.unit || ''), name: String(r.partName || r.materialName || '') });
+      e.q += q;
+    });
+    // ยอดรอบก่อน
+    const snapSh = kdSheet_(KD_SNAP_SHEET, KD_SNAP_HEADERS);
+    const prev = {};
+    if (snapSh.getLastRow() > 1) snapSh.getRange(2, 1, snapSh.getLastRow() - 1, KD_SNAP_HEADERS.length).getValues().forEach(function (r) {
+      if (r[0]) prev[String(r[0])] = { loc: String(r[1]), part: String(r[2]), lot: String(r[3]), q: Number(r[4]) || 0, unit: String(r[5]), name: String(r[6]) };
+    });
+    const nPrev = Object.keys(prev).length, nCur = Object.keys(cur).length;
+    // กันข้อมูลต้นทางผิดปกติ (ไฟล์ว่าง / หายไปเกินครึ่ง) ไม่ให้กลายเป็น "ของออก" ทั้งคลัง
+    if (nPrev > 100 && nCur < nPrev * 0.5) throw new Error('ข้อมูลต้นทางลดลงผิดปกติ (' + nPrev + ' → ' + nCur + ') ข้ามรอบนี้');
+    const moves = nPrev ? kdDiff_(prev, cur) : [];
+    if (moves.length) {
+      const mv = kdSheet_(KD_MOVE_SHEET, KD_MOVE_HEADERS), now = fmt_(new Date());
+      const rows = moves.map(function (m) { return [snapAt, m.type, m.part, m.lot, m.from, m.to, m.q, m.unit, m.name, now]; });
+      mv.getRange(mv.getLastRow() + 1, 1, rows.length, KD_MOVE_HEADERS.length).setNumberFormat('@').setValues(rows.map(function (r) {
+        return r.map(function (v, i) { return i === 6 ? v : String(v); });
+      }));
+    }
+    // เก็บยอดรอบนี้ไว้เทียบรอบหน้า
+    const out = Object.keys(cur).map(function (k) { const e = cur[k]; return [k, e.loc, e.part, e.lot, e.q, e.unit, e.name]; });
+    snapSh.clearContents();
+    snapSh.getRange(1, 1, 1, KD_SNAP_HEADERS.length).setValues([KD_SNAP_HEADERS]);
+    if (out.length) {
+      snapSh.getRange(2, 1, out.length, 4).setNumberFormat('@');
+      snapSh.getRange(2, 1, out.length, KD_SNAP_HEADERS.length).setValues(out);
+    }
+    props.setProperty('KD_SNAP_AT', snapAt);
+    props.deleteProperty('KD_POLL_ERR');
+    return { snapAt: snapAt, rows: nCur, moves: moves.length, first: !nPrev };
+  } catch (err) {
+    props.setProperty('KD_POLL_ERR', fmt_(new Date()) + ' ' + ((err && err.message) || err));
+    throw err;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// เทียบ 2 รอบ → in (เข้า) / out (ออก) / move (รหัส+Lot เดียวกัน ลดที่ช่องหนึ่ง เพิ่มอีกช่องในรอบเดียวกัน)
+function kdDiff_(prev, cur) {
+  const byPL = {}, seen = {};
+  Object.keys(prev).concat(Object.keys(cur)).forEach(function (k) {
+    if (seen[k]) return; seen[k] = 1;
+    const a = prev[k], b = cur[k], e = b || a;
+    const delta = Math.round(((b ? b.q : 0) - (a ? a.q : 0)) * 1e6) / 1e6;
+    if (!delta) return;
+    const pl = e.part + '|' + e.lot, g = byPL[pl] || (byPL[pl] = { dec: [], inc: [] });
+    const it = { loc: e.loc, part: e.part, lot: e.lot, q: Math.abs(delta), unit: e.unit, name: e.name };
+    (delta < 0 ? g.dec : g.inc).push(it);
+  });
+  const out = [];
+  Object.keys(byPL).forEach(function (pl) {
+    const g = byPL[pl];
+    g.dec.sort(function (x, y) { return y.q - x.q; }); g.inc.sort(function (x, y) { return y.q - x.q; });
+    g.dec.forEach(function (dn) {
+      g.inc.forEach(function (up) {
+        if (dn.q <= 1e-9 || up.q <= 1e-9) return;
+        const q = Math.min(dn.q, up.q);
+        out.push({ type: 'move', part: dn.part, lot: dn.lot, from: dn.loc, to: up.loc, q: q, unit: dn.unit, name: dn.name });
+        dn.q -= q; up.q -= q;
+      });
+    });
+    g.dec.forEach(function (x) { if (x.q > 1e-9) out.push({ type: 'out', part: x.part, lot: x.lot, from: x.loc, to: '', q: x.q, unit: x.unit, name: x.name }); });
+    g.inc.forEach(function (x) { if (x.q > 1e-9) out.push({ type: 'in', part: x.part, lot: x.lot, from: '', to: x.loc, q: x.q, unit: x.unit, name: x.name }); });
+  });
+  return out;
+}
+
+/** ความเคลื่อนไหว Kingdee ล่าสุด (ใหม่ → เก่า) + สถานะตัวดึง */
+function getKingdeeMoves(opt) {
+  opt = opt || {};
+  const props = PropertiesService.getScriptProperties();
+  const since = clean_(opt.since, 19), loc = clean_(opt.loc, 30), limit = Math.min(Number(opt.limit) || 300, 2000);
+  const out = [];
+  const sh = book_().getSheetByName(KD_MOVE_SHEET);
+  if (sh && sh.getLastRow() > 1) {
+    const vals = sh.getRange(2, 1, sh.getLastRow() - 1, KD_MOVE_HEADERS.length).getValues();
+    for (let i = vals.length - 1; i >= 0 && out.length < limit; i--) {
+      const r = vals[i], at = fmt_(r[0]);
+      if (since && at < since) break;
+      if (loc && String(r[4]) !== loc && String(r[5]) !== loc) continue;
+      out.push([at, String(r[1]), String(r[2]), String(r[3]), String(r[4]), String(r[5]), Number(r[6]) || 0, String(r[7]), String(r[8])]);
+    }
+  }
+  // จับคู่กับการสแกนในแอป (วันทำงานเดียวกัน · ไม่นับผู้ทดสอบ)
+  const appOnly = [];
+  if (out.length || opt.appOnly !== false) {
+    const testRe = /test|ทดสอบ/i, today = workShift_(fmt_(new Date())).date, idx = {}, days = {};
+    out.forEach(function (m) { days[workShift_(m[0]).date] = 1; });
+    days[today] = 1;
+    const appMoves = [];
+    readLog_().forEach(function (e) {
+      const at = fmt_(e.at), ev = String(e.event); if (!at || ev.indexOf('photo') === 0 || testRe.test(String(e.by || ''))) return;
+      const day = workShift_(at).date; if (!days[day]) return;
+      const part = String(e.part_code || ''), from = String(e.location_from || ''), to = String(e.location_to || '');
+      if (to) idx[day + '|' + part + '|to|' + to] = 1;
+      if (from) idx[day + '|' + part + '|from|' + from] = 1;
+      if (ev === 'move' && day === today) appMoves.push([at, part, from, to, String(e.by || '')]);
+    });
+    const kdIdx = {};
+    out.forEach(function (m) {
+      const day = workShift_(m[0]).date, t = m[1], part = m[2], from = m[4], to = m[5];
+      if (from) kdIdx[day + '|' + part + '|' + from] = 1;
+      if (to) kdIdx[day + '|' + part + '|' + to] = 1;
+      const ok = t === 'move' ? !!(idx[day + '|' + part + '|from|' + from] || idx[day + '|' + part + '|to|' + to])
+        : t === 'in' ? !!idx[day + '|' + part + '|to|' + to] : !!idx[day + '|' + part + '|from|' + from];
+      m.push(ok ? 'ok' : 'kd_only');
+    });
+    appMoves.forEach(function (a) {
+      if (!kdIdx[today + '|' + a[1] + '|' + a[2]] && !kdIdx[today + '|' + a[1] + '|' + a[3]]) appOnly.push(a);
+    });
+    appOnly.reverse();
+  }
+  return { moves: out, appOnly: appOnly.slice(0, 100), snapAt: props.getProperty('KD_SNAP_AT') || '', lastPoll: props.getProperty('KD_LAST_POLL') || '', err: props.getProperty('KD_POLL_ERR') || '' };
 }

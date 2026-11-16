@@ -491,3 +491,16 @@ button.loc-pill { border: 1px solid var(--blue); font-family: inherit; font-size
 @media (max-width: 999px) { #kdList .find-list, #mapFind .find-list { max-height: none; overflow: visible; } }
 /* มือถือ: ส่วนบนของผังติดจอได้เฉพาะตอนเตี้ย — แท็บ Kingdee / ตอนมีผลค้นหา ส่วนบนสูงเกินจอ จะบังผัง → ให้เลื่อนตามหน้าปกติ */
 main.view-kd > .map-top, .map-top.tall { position: static; }
+
+/* ความเคลื่อนไหว Kingdee */
+.kdm-box { margin-top: 8px; }
+.kdm-head { display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-bottom: 4px; flex-wrap: wrap; }
+.kdm-sum { margin: 4px 0; }
+.kdm-flag { display: inline-block; font-size: 11px; font-weight: 700; color: #b42318; background: #fde8e8; border-radius: 5px; padding: 0 5px; }
+.kdm-ok { display: inline-block; font-size: 11px; color: #067647; background: #dcfae6; border-radius: 5px; padding: 0 5px; }
+.kdm-apponly { margin-top: 6px; font-size: 13px; }
+.kdm-apponly summary { cursor: pointer; font-weight: 600; }
+.kdm-ao { padding: 3px 0; border-bottom: 1px solid #eef0f4; }
+.cell.kd-moved { outline: 2px dashed #f97316; outline-offset: 1px; z-index: 1; }
+.lg.kd-moved-lg { background: #fff; border: 2px dashed #f97316; }
+.kd-scroll .find-list { max-height: none; }

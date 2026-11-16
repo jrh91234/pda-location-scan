@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261116-1852'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261116-2120'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -2165,6 +2165,7 @@ function renderMapGrid() {
   var latestLoc = (MAP.data.recent && MAP.data.recent[0]) ? (MAP.data.recent[0].to || MAP.data.recent[0].from) : '';
   var hotSince = Date.now() - RECENT_MIN * 60000;
   var KDV = S.view === 'kd', kdx = KDV ? kdCompute() : null;
+  if (kdx) kdx.moved = kdmLatestSet();
   var find = KDV ? null : mapFind(); // ผลค้นหา (null = ไม่ได้ค้นหา)
   renderMapFind(find);
   // สรุปทั้งคลัง + โซนนี้
@@ -2243,8 +2244,9 @@ function mapActions() {
 function mapTrailPaint() {
   var out = $('mapOut'); if (!out) return;
   var old = $('trailSvg'); if (old) old.parentNode.removeChild(old);
-  if (!MAP.trail || !MAP.data || MAP.q || S.view === 'kd' || (RP.open && RP.events && RP.events.length)) return;
-  var list = mapActions(); if (!list.length) return;
+  var KDV = S.view === 'kd';
+  if (!(KDV ? KDM.trail : MAP.trail) || !MAP.data || (!KDV && MAP.q) || (RP.open && RP.events && RP.events.length)) return;
+  var list = KDV ? kdTrailActions() : mapActions(); if (!list.length) return;
   var box = out.getBoundingClientRect();
   function pt(code) {
     var c = code && out.querySelector('[data-cell="' + code + '"]'); if (!c) return null;
@@ -3043,7 +3045,7 @@ function deletePhotoUi(id, scanId, row) {
 }
 
 // ======================= เริ่มต้น =======================
-window.addEventListener('resize', function () { if (S.view === 'map') rpPaint(); });
+window.addEventListener('resize', function () { if (isMapView()) rpPaint(); });
 // เล่นย้อนหลัง: ลูกศรซ้าย/ขวา = ทีละ 1 รายการ · Space = เล่น/หยุด (บนคอม)
 document.addEventListener('keydown', function (e) {
   if (S.view !== 'map' || !RP.open || !RP.events || !RP.events.length) return;
@@ -3056,7 +3058,7 @@ document.addEventListener('keydown', function (e) {
 // เลื่อนแถวชั้นวางแนวนอน (มือถือ) → วาดลูกศรใหม่ให้ตรงช่อง
 var trailRaf = 0;
 document.addEventListener('scroll', function (e) {
-  if (S.view !== 'map' || !e.target.classList || !e.target.classList.contains('rack-scroll')) return;
+  if (!isMapView() || !e.target.classList || !e.target.classList.contains('rack-scroll')) return;
   cancelAnimationFrame(trailRaf); trailRaf = requestAnimationFrame(rpPaint);
 }, true);
 
@@ -3199,18 +3201,21 @@ function kdTopHtml() {
       '<span class="small">เทียบระดับ</span><div class="seg"><button data-kdmode="lot" class="' + (KD.mode === 'lot' ? 'active' : '') + '">รหัส + Lot</button>' +
       '<button data-kdmode="part" class="' + (KD.mode === 'part' ? 'active' : '') + '">รหัสอย่างเดียว</button></div>' +
       '<span id="kdSnap" class="small muted"></span>' +
+      '<button class="btn small' + (KDM.trail ? ' active' : '') + '" id="kdTrail" title="ลูกศร 10 ความเคลื่อนไหว Kingdee ล่าสุด">➜ ความเคลื่อนไหว</button>' +
     '</div>' +
     '<div id="kdRound" class="kd-round"></div>' +
     '<div class="map-legend small">' + Object.keys(KD_ST).map(function (k) {
       return '<span title="' + esc(KD_ST[k][2]) + '"><i class="lg kd-' + k + '"></i>' + KD_ST[k][1] + '</span>';
-    }).join('') + '<span><i class="lg kd-done-lg">✔</i>กดนับเสร็จแล้ว</span></div>' +
-    '<div id="kdList"></div>';
+    }).join('') + '<span><i class="lg kd-done-lg">✔</i>กดนับเสร็จแล้ว</span><span><i class="lg kd-moved-lg"></i>Kingdee เปลี่ยนรอบล่าสุด</span></div>' +
+    '<div id="kdList"></div><div id="kdMoves"></div>';
 }
 function bindKdTop() {
   Array.prototype.forEach.call(document.querySelectorAll('[data-kdmode]'), function (b) {
     b.onclick = function () { KD.mode = b.getAttribute('data-kdmode'); store('pda_kd_mode', KD.mode); kdCompute.key = null; renderMap(); };
   });
-  renderKdSnap(); renderKdRound();
+  renderKdSnap(); renderKdRound(); renderKdMoves();
+  $('kdTrail').onclick = function () { KDM.trail = !KDM.trail; store('pda_kdm_trail', KDM.trail ? '1' : '0'); this.classList.toggle('active', KDM.trail); rpPaint(); };
+  if (Date.now() - KDM.loadedAt > 60000) loadKdMoves();
 }
 function renderKdSnap() {
   var el = $('kdSnap'); if (!el) return;
@@ -3259,6 +3264,7 @@ function renderKdSummary(x) {
 function kdCellHtml(code, x) {
   var b = x.bins[code], cls = 'cell ' + (b ? 'kd-' + b.st : 'empty');
   if (b && b.marked) cls += ' kd-done';
+  if (x.moved && x.moved[code]) cls += ' kd-moved';
   if (code === S.location) cls += ' cur';
   var txt = !b ? '' : b.st === 'todo' ? (b.nk > 1 ? b.nk : '') : b.st === 'diff' ? b.nd : b.st === 'extra' ? (b.na > 1 ? b.na : '') : '';
   return '<td><button class="' + cls + '" data-cell="' + code + '" title="' + code + (b ? ' · ' + KD_ST[b.st][1] + ' · Kingdee ' + b.nk + ' รายการ · นับได้ ' + b.na + ' รายการ' : '') + '">' + txt + '</button></td>';
@@ -3316,7 +3322,11 @@ function openKdCell(code) {
     '<p class="small">' + (st ? KD_ST[st][0] + ' <b>' + KD_ST[st][1] + '</b> — ' + KD_ST[st][2] : 'ไม่มีข้อมูล') +
       (b && b.marked ? '<br>✔ กดนับเสร็จโดย ' + esc(b.marked[1]) + ' · ' + esc(fmtWhen(b.marked[0])) : '') +
       (b && b.last ? '<br><span class="muted">เคลื่อนไหวล่าสุดในแอป ' + esc(agoText(b.last)) + '</span>' : '') + '</p>' +
-    '<div class="kd-scroll">' + kdTableHtml(b) + '</div>' +
+    '<div class="kd-scroll">' + kdTableHtml(b) +
+      (function () {
+        var h = KDM.moves.filter(function (m) { return m[4] === code || m[5] === code; }).slice(0, 15);
+        return h.length ? '<div class="sec-title small"><span>📈 ความเคลื่อนไหว Kingdee ของช่องนี้</span></div><div class="find-list">' + h.map(function (m) { return kdmRowHtml(m); }).join('') + '</div>' : '';
+      })() + '</div>' +
     '<p class="muted small">ยอด Kingdee ณ ' + esc(fmtWhen(kdSnapText())) + ' · ระดับ ' + (KD.mode === 'lot' ? 'รหัส + Lot' : 'รหัส') + '</p>' +
     '<div class="actions">' +
       '<button class="btn ' + (b && b.marked ? '' : 'primary') + '" id="kdMark">' + (b && b.marked ? 'ยกเลิก "นับเสร็จ"' : '✔ นับช่องนี้เสร็จ') + '</button>' +
@@ -3381,6 +3391,104 @@ function exportKdDiff() {
     XLSX.writeFile(wb, 'เทียบKingdee_' + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '-' + pad(d.getHours()) + pad(d.getMinutes()) + '.xlsx');
     toast('ดาวน์โหลด ' + rows.length + ' รายการ');
   }, function () { toast('โหลดตัวสร้าง Excel ไม่ได้ (ต้องต่ออินเทอร์เน็ต)', 3000); });
+}
+
+// ===== ความเคลื่อนไหว Kingdee (เซิร์ฟเวอร์เทียบยอดทุก 10 นาที → ชีต KingdeeMoves) =====
+// moves: [at, type(in|out|move), part, lot, from, to, qty, unit, name, match(ok|kd_only)]
+var KDM = { moves: storeJson('pda_kdm') || [], appOnly: [], lastPoll: '', snapAt: '', err: '', loadedAt: 0, loading: false,
+  range: store('pda_kdm_range') || 'today', more: 0, trail: store('pda_kdm_trail') !== '0' };
+var KDM_TYPE = { in: ['🟢', 'เข้า'], out: ['🔴', 'ออก'], move: ['🟠', 'ย้าย'] };
+MAP_EV.kd_in = '🟢 เข้า (Kingdee)'; MAP_EV.kd_out = '🔴 ออก (Kingdee)';
+function loadKdMoves() {
+  if (KDM.loading || !apiUrl()) return;
+  KDM.loading = true;
+  api('getKingdeeMoves', { limit: 800 }).then(function (d) {
+    KDM.loading = false; KDM.loadedAt = Date.now();
+    var changed = JSON.stringify(d.moves.slice(0, 5)) !== JSON.stringify(KDM.moves.slice(0, 5)) || d.moves.length !== KDM.moves.length;
+    KDM.moves = d.moves || []; KDM.appOnly = d.appOnly || []; KDM.lastPoll = d.lastPoll; KDM.snapAt = d.snapAt; KDM.err = d.err;
+    storeJson('pda_kdm', KDM.moves.slice(0, 300));
+    if (S.view === 'kd') { renderKdMoves(); if (changed && MAP.data) renderMapGrid(); }
+  }, function (err) {
+    KDM.loading = false; KDM.err = err.message;
+    if (S.view === 'kd') renderKdMoves();
+  });
+}
+setInterval(function () { if (S.view === 'kd' && document.visibilityState !== 'hidden' && Date.now() - KDM.loadedAt > 60000) loadKdMoves(); }, 15000);
+function kdmLatestSet() {
+  var s = {}, t = KDM.moves[0] && KDM.moves[0][0];
+  if (!t || Date.now() - bkkMs(t) > 3 * 3600000) return s; // รอบล่าสุดเก่ากว่า 3 ชม. ไม่ต้องไฮไลต์
+  KDM.moves.forEach(function (m) { if (m[0] === t) { if (m[4]) s[m[4]] = 1; if (m[5]) s[m[5]] = 1; } });
+  return s;
+}
+function kdmFiltered() {
+  var r = KDM.range, now = Date.now(), today = workDay();
+  return KDM.moves.filter(function (m) {
+    if (r === 'hour') return now - bkkMs(m[0]) <= 3600000;
+    if (r === 'today') return workShiftDate(m[0]) === today;
+    return true;
+  });
+}
+// วันทำงาน (เริ่ม 08:00) ของเวลา 'yyyy-MM-dd HH:mm:ss'
+function workShiftDate(at) {
+  var t = bkkMs(at); if (!t) return '';
+  var d = new Date(t + 7 * 3600000 - 8 * 3600000);
+  return d.getUTCFullYear() + '-' + pad(d.getUTCMonth() + 1) + '-' + pad(d.getUTCDate());
+}
+function kdmRowHtml(m, showLoc) {
+  var t = KDM_TYPE[m[1]] || ['•', m[1]], info = bomInfo(m[2]) || {};
+  var where = m[1] === 'move' ? '<span class="loc-pill">' + esc(m[4]) + '</span> → <span class="loc-pill">' + esc(m[5]) + '</span>'
+    : '<span class="loc-pill">' + esc(m[4] || m[5]) + '</span>';
+  var sign = m[1] === 'in' ? '+' : m[1] === 'out' ? '−' : '';
+  return '<button type="button" class="find-item kdm-row" data-kdmloc="' + esc(m[5] || m[4]) + '">' +
+    '<span class="kd-ico">' + t[0] + '</span><span class="find-main">' +
+    '<span class="find-top">' + (showLoc !== false ? where + ' ' : '') + '<b>' + t[1] + ' ' + sign + kdFmt(m[6]) + '</b> <span class="small muted">' + esc(m[7]) + '</span>' +
+      (m[9] === 'kd_only' ? ' <span class="kdm-flag" title="Kingdee มีรายการนี้ แต่วันนี้ยังไม่มีใครสแกนในแอป">ไม่ได้สแกน</span>' : m[9] === 'ok' ? ' <span class="kdm-ok" title="แอปมีการสแกนรายการนี้ในวันเดียวกัน">✓ สแกนแล้ว</span>' : '') + '</span>' +
+    '<span class="find-sub">' + esc(m[2]) + (m[3] ? ' · Lot ' + esc(m[3]) : '') + ((m[8] || info.name) ? ' · ' + esc(m[8] || info.name) : '') + '</span>' +
+    '<span class="find-sub muted">' + esc(fmtWhen(m[0])) + ' · ' + esc(agoText(m[0])) + '</span></span></button>';
+}
+function renderKdMoves() {
+  var el = $('kdMoves'); if (!el) return;
+  var list = kdmFiltered(), lim = (mapWide() ? 30 : 5) + KDM.more, n = { in: 0, out: 0, move: 0, flag: 0 };
+  list.forEach(function (m) { n[m[1]] = (n[m[1]] || 0) + 1; if (m[9] === 'kd_only') n.flag++; });
+  var status = !KDM.lastPoll && !KDM.moves.length
+    ? '<div class="msg warn small">ยังไม่ได้เปิดตัวดึงความเคลื่อนไหว — ต้องกดอนุญาตใน Apps Script ครั้งแรก (ฟังก์ชัน <b>setupKingdeeTrigger</b>)</div>'
+    : '<div class="muted small">เทียบยอด Kingdee ทุก 10 นาที · รอบล่าสุด ' + esc(fmtWhen(KDM.snapAt)) + (KDM.lastPoll ? ' · เช็คล่าสุด ' + esc(agoText(KDM.lastPoll)) : '') +
+      (KDM.err ? '<br><span class="err-text">⚠ ' + esc(KDM.err) + '</span>' : '') + '</div>';
+  var html = '<div class="find-box kdm-box"><div class="kdm-head"><b>📈 ความเคลื่อนไหว Kingdee</b>' +
+      '<span class="seg">' + [['hour', '1 ชม.'], ['today', 'วันนี้'], ['all', 'ทั้งหมด']].map(function (r) {
+        return '<button type="button" data-kdmr="' + r[0] + '" class="' + (KDM.range === r[0] ? 'active' : '') + '">' + r[1] + '</button>';
+      }).join('') + '</span></div>' + status +
+    (list.length ? '<div class="small kdm-sum">🟢 เข้า ' + n.in + ' · 🔴 ออก ' + n.out + ' · 🟠 ย้าย ' + n.move + (n.flag ? ' · <span class="kdm-flag">ไม่ได้สแกน ' + n.flag + '</span>' : '') + '</div>' +
+      '<div class="find-list">' + list.slice(0, lim).map(function (m) { return kdmRowHtml(m); }).join('') + '</div>' +
+      (list.length > lim ? '<button type="button" class="btn small" id="kdmMore">ดูเพิ่ม (อีก ' + (list.length - lim) + ')</button>' : '') +
+      (KDM.more ? ' <button type="button" class="btn small" id="kdmLess">ย่อ</button>' : '')
+      : '<div class="muted small center pad">ไม่มีความเคลื่อนไหวในช่วงนี้</div>') +
+    (KDM.appOnly.length ? '<details class="kdm-apponly"><summary>📱 แอปย้ายแล้ว แต่ Kingdee ยังไม่ทำรายการ (วันนี้ ' + KDM.appOnly.length + ')</summary>' +
+      KDM.appOnly.slice(0, 50).map(function (a) {
+        return '<div class="small kdm-ao"><span class="loc-pill">' + esc(a[2]) + '</span> → <span class="loc-pill">' + esc(a[3]) + '</span> ' + esc(a[1]) + ' · ' + esc(a[4]) + ' · ' + esc(fmtWhen(a[0])) + '</div>';
+      }).join('') + '</details>' : '') +
+    '</div>';
+  if (el._html === html) return;
+  el._html = html; el.innerHTML = html;
+  Array.prototype.forEach.call(el.querySelectorAll('[data-kdmr]'), function (b) {
+    b.onclick = function () { KDM.range = b.getAttribute('data-kdmr'); store('pda_kdm_range', KDM.range); KDM.more = 0; renderKdMoves(); };
+  });
+  Array.prototype.forEach.call(el.querySelectorAll('[data-kdmloc]'), function (b) {
+    b.onclick = function () { var loc = b.getAttribute('data-kdmloc'); mapGotoCell(loc); setTimeout(function () { openKdCell(loc); }, 350); };
+  });
+  if ($('kdmMore')) $('kdmMore').onclick = function () { KDM.more += 30; renderKdMoves(); };
+  if ($('kdmLess')) $('kdmLess').onclick = function () { KDM.more = 0; renderKdMoves(); };
+}
+// ลูกศรบนผัง Kingdee: 10 ความเคลื่อนไหวล่าสุด (รูปแบบเดียวกับผังสแกน)
+function kdTrailActions() {
+  var out = [];
+  KDM.moves.forEach(function (m) {
+    if (out.length > TRAIL_N) return;
+    var ev = m[1] === 'move' ? 'move' : m[1] === 'in' ? 'kd_in' : 'kd_out', loc = m[5] || m[4], last = out[out.length - 1];
+    if (last && last.loc === loc && ev !== 'move' && last.ev !== 'move') { last.n++; return; }
+    if (out.length < TRAIL_N) out.push({ at: m[0], first: m[0], ev: ev, from: m[4], to: m[5], loc: loc, part: m[2], by: 'Kingdee', n: 1 });
+  });
+  return out;
 }
 
 (function init() {

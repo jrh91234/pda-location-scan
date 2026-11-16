@@ -37,6 +37,7 @@
   Sheet.prototype.getMaxRows = function () { return 1000; };
   Sheet.prototype.getRange = function (r, c, nr, nc) { return new Range(this, r, c, nr || 1, nc || 1); };
   Sheet.prototype.setFrozenRows = function () {};
+  Sheet.prototype.clearContents = function () { sheets[this.name] = []; persist(); return this; };
   Sheet.prototype.deleteRow = function (r) { sheets[this.name].splice(r - 1, 1); persist(); };
   Sheet.prototype.deleteColumn = function (c) { sheets[this.name].forEach(function (row) { row.splice(c - 1, 1); }); persist(); };
   Sheet.prototype.getLastColumn = function () { return sheets[this.name].reduce(function (m, r) { return Math.max(m, r.length); }, 0); };
@@ -58,6 +59,19 @@
   }
   var props = store('gasmock_prop_');
   window.PropertiesService = { getScriptProperties: function () { return props; } };
+  // ดึง URL ภายนอกแบบ synchronous (เหมือน UrlFetchApp) — ใช้ทดสอบ kingdeePoll
+  window.UrlFetchApp = { fetch: function (url, opt) {
+    var x = new XMLHttpRequest(); x.open((opt && opt.method) || 'GET', url, false); x.send();
+    var heads = {}; x.getAllResponseHeaders().trim().split(/\r?\n/).forEach(function (l) { var i = l.indexOf(':'); if (i > 0) heads[l.slice(0, i).trim()] = l.slice(i + 1).trim(); });
+    return { getResponseCode: function () { return x.status; }, getContentText: function () { return x.responseText; }, getHeaders: function () { return heads; } };
+  } };
+  var mockTriggers = [];
+  window.ScriptApp = {
+    getProjectTriggers: function () { return mockTriggers; },
+    deleteTrigger: function (t) { mockTriggers.splice(mockTriggers.indexOf(t), 1); },
+    newTrigger: function (fn) { var b = { timeBased: function () { return b; }, everyMinutes: function () { return b; },
+      create: function () { var t = { getHandlerFunction: function () { return fn; } }; mockTriggers.push(t); return t; } }; return b; }
+  };
   var cache = {};
   window.CacheService = { getScriptCache: function () { return { get: function (k) { return cache[k] || null; }, put: function (k, v) { cache[k] = v; }, remove: function (k) { delete cache[k]; } }; } };
   window.LockService = { getScriptLock: function () { return { tryLock: function () { return true; }, waitLock: function () {}, releaseLock: function () {} }; } };
