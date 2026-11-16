@@ -340,7 +340,8 @@ button.loc-pill { border: 1px solid var(--blue); font-family: inherit; font-size
   main.view-map > #mapOut { grid-column: 2; grid-row: 1 / span 2; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(480px, 1fr)); gap: 10px; align-content: start; }
   main.view-map > #mapOut > p { grid-column: 1 / -1; }
   main.view-map > #mapOut.pair { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-  main.view-map > #mapOut.stack { grid-template-columns: minmax(0, 860px); }
+  main.view-map > #mapOut.stack { display: flex; flex-direction: column-reverse; justify-content: flex-end; max-width: 860px; } /* CP-01 อยู่ชั้นล่างสุด */
+  main.view-map > #mapOut.stack > p { order: -1; }
   main.view-map .zone-col { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
   main.view-map .zone-head { position: sticky; top: 0; z-index: 4; background: var(--blue); color: #fff; font-weight: 700; border-radius: 8px; padding: 6px 12px; }
   main.view-map > #rpDock { grid-column: 2; grid-row: 3; border-radius: 10px 10px 0 0; }
