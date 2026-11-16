@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261116-1815'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261116-1821'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -2042,7 +2042,7 @@ function renderMapFind(find) {
   }
   var zs = Object.keys(find.zones).sort();
   var shownCells = MAP.findAll ? find.list : find.list.slice(0, 8);
-  el.innerHTML = '<div class="find-box">' +
+  el._html = null; el.innerHTML = '<div class="find-box">' +
     '<div class="find-sum">พบ <b>' + find.total + '</b> กล่อง ใน <b>' + find.list.length + '</b> ช่อง' +
       (zs.length > 1 || !mapZoneShown(zs[0]) ? ' · ' + zs.map(function (z) {
         return '<button type="button" class="find-zone' + (mapZoneShown(z) ? ' on' : '') + '" data-fz="' + z + '">' + esc(z) + ' ' + find.zones[z] + '</button>';
@@ -3244,8 +3244,9 @@ function renderKdList(x) {
     var st = x.bins[loc].st; return f === 'diff' ? (st === 'diff' || st === 'missing' || st === 'extra') : st === f;
   }).sort();
   var chips = [['diff', 'ต้องตรวจ (' + (x.sum.diff + x.sum.missing + x.sum.extra) + ')'], ['todo', '⚪ ยังไม่นับ (' + x.sum.todo + ')'], ['match', '🟢 ตรง (' + x.sum.match + ')']];
-  var shown = KD.all ? list : list.slice(0, 30);
-  el.innerHTML = '<div class="find-box"><div class="kd-chips">' + chips.map(function (c) {
+  var lim = (mapWide() ? 30 : 5) + (KD.more || 0); // มือถือ: แสดงน้อยก่อน ไม่ทำกล่องเลื่อนซ้อนในหน้า · กดดูเพิ่มทีละ 30
+  var shown = list.slice(0, lim);
+  var html = '<div class="find-box"><div class="kd-chips">' + chips.map(function (c) {
       return '<button type="button" class="find-zone' + (f === c[0] ? ' on' : '') + '" data-kdf="' + c[0] + '">' + c[1] + '</button>';
     }).join('') + '</div>' +
     (list.length ? '<div class="find-list">' + shown.map(function (loc) {
@@ -3255,13 +3256,17 @@ function renderKdList(x) {
         '<span class="find-sub muted">Kingdee ' + b.nk + ' รายการ · นับได้ ' + b.na + ' รายการ' + (b.nd && b.st === 'diff' ? ' · ต่าง ' + b.nd : '') + '</span>' +
         (first ? '<span class="find-sub">' + esc(first.part) + (first.lot ? ' · ' + esc(first.lot) : '') + (b.keys.length > 1 ? ' +' + (b.keys.length - 1) : '') + '</span>' : '') +
         '</span></button>';
-    }).join('') + '</div>' + (list.length > 30 ? '<button type="button" class="btn small" id="kdMore">' + (KD.all ? 'ย่อ' : 'ดูทั้งหมด ' + list.length + ' ช่อง') + '</button>' : '')
+    }).join('') + '</div>' + (list.length > lim ? '<button type="button" class="btn small" id="kdMore">ดูเพิ่ม (อีก ' + (list.length - lim) + ' ช่อง)</button>' : '') +
+      (KD.more ? ' <button type="button" class="btn small" id="kdLess">ย่อ</button>' : '')
     : '<div class="muted small center pad">ไม่มีรายการ</div>') + '</div>';
-  Array.prototype.forEach.call(el.querySelectorAll('[data-kdf]'), function (b) { b.onclick = function () { KD.filter = b.getAttribute('data-kdf'); KD.all = false; renderKdList(kdCompute()); }; });
+  if (el._html === html) return; // ไม่มีอะไรเปลี่ยน → ไม่วาดใหม่ (กันเด้ง/สะดุดตอนอัปเดตอัตโนมัติ)
+  el._html = html; el.innerHTML = html;
+  Array.prototype.forEach.call(el.querySelectorAll('[data-kdf]'), function (b) { b.onclick = function () { KD.filter = b.getAttribute('data-kdf'); KD.more = 0; renderKdList(kdCompute()); }; });
   Array.prototype.forEach.call(el.querySelectorAll('[data-kdc]'), function (b) {
     b.onclick = function () { var loc = b.getAttribute('data-kdc'); mapGotoCell(loc); setTimeout(function () { openKdCell(loc); }, 350); };
   });
-  if ($('kdMore')) $('kdMore').onclick = function () { KD.all = !KD.all; renderKdList(kdCompute()); };
+  if ($('kdMore')) $('kdMore').onclick = function () { KD.more = (KD.more || 0) + 30; renderKdList(kdCompute()); };
+  if ($('kdLess')) $('kdLess').onclick = function () { KD.more = 0; renderKdList(kdCompute()); };
 }
 // ตารางเทียบในช่อง
 function kdTableHtml(b, compact) {
