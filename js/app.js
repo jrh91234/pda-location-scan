@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261116-1703'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261116-1747'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -1857,7 +1857,7 @@ if (MAP_WIDE_MQ) {
 }
 
 function renderMap() {
-  var zones = Object.keys(mapLayout());
+  var zones = Object.keys(mapLayout()).sort(); // เรียงโซนตามตัวอักษร (CA … CJ, CO, CP, CQ)
   if (!MAP.zone) MAP.zone = (S.location && zones.indexOf(S.location.split('-')[0]) >= 0) ? S.location.split('-')[0] : zones[0];
   $('main').innerHTML =
     '<section class="map-top">' +
