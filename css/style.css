@@ -434,3 +434,26 @@ button.loc-pill { border: 1px solid var(--blue); font-family: inherit; font-size
 .map-age { white-space: nowrap; }
 .cell.fresh { animation: cellFresh 1.2s ease-out 3; z-index: 2; }
 @keyframes cellFresh { 0% { box-shadow: 0 0 0 0 rgba(230,150,0,.9); transform: scale(1.25); } 100% { box-shadow: 0 0 0 10px rgba(230,150,0,0); transform: scale(1); } }
+
+/* ค้นหาบนผัง */
+.map-search { position: relative; margin-top: 8px; }
+.map-search .field { padding-right: 36px; }
+.map-qx { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); border: 0; background: transparent; font-size: 16px; color: var(--muted); padding: 6px 8px; cursor: pointer; }
+.find-box { background: var(--card); border: 1px solid #f0c060; border-radius: 10px; padding: 8px 10px; margin-top: 8px; }
+.find-sum { font-size: 14px; margin-bottom: 4px; }
+.find-zone { border: 1px solid var(--line, #d6dbe3); background: #fff; border-radius: 12px; padding: 1px 8px; margin-left: 4px; font-size: 12px; cursor: pointer; }
+.find-zone.on { background: #fff1cc; border-color: #e6a000; }
+.find-list { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; max-height: 30vh; overflow: auto; }
+@media (min-width: 1000px) { .find-list { max-height: 46vh; } }
+.find-item { display: flex; gap: 8px; align-items: flex-start; text-align: left; border: 1px solid #eef0f4; background: #fff; border-radius: 8px; padding: 6px 8px; cursor: pointer; font: inherit; }
+.find-item:hover { background: #fffaf0; }
+.find-main { display: flex; flex-direction: column; min-width: 0; }
+.find-top { font-size: 13px; }
+.find-sub { font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+.fifo-badge { position: absolute; top: 1px; right: 1px; min-width: 14px; height: 14px; line-height: 14px; border-radius: 7px; background: #6b7280; color: #fff; font-size: 10px; font-style: normal; font-weight: 700; text-align: center; padding: 0 3px; z-index: 2; box-shadow: 0 0 0 1.5px #fff; }
+.fifo-badge.first { background: #d97706; }
+.fifo-badge.inline { position: static; display: inline-block; flex: none; margin-top: 1px; }
+.cell { position: relative; }
+.cell.dim { opacity: .3; }
+.cell.hit { outline: 3px solid #f59e0b; outline-offset: -1px; z-index: 1; }
+.cell.hit.empty { background: #fff7e0; }

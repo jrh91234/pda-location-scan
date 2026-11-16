@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261116-1554'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261116-1612'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -1754,6 +1754,8 @@ function saveManual() {
 // ======================= ผัง Location =======================
 // แสดงทุก Location ตามแถวชั้นวาง (โซน → แถว → ช่อง 01–16 × ชั้น A/B) ว่าช่องไหนสแกนของเข้าไปแล้ว
 var MAP = { data: null, loading: false, zone: '', mode: 'all', err: '', more: false, trail: store('pda_map_trail') !== '0' };
+MAP.items = storeJson('pda_map_items') || []; MAP.itemsSig = MAP.items.length ? (store('pda_map_sig') || '') : '';
+MAP.q = ''; MAP.findAll = false;
 var TRAIL_N = 10;
 MAP.live = store('pda_map_live') !== '0'; MAP.loadedAt = 0; MAP.fresh = {};
 var MAP_LIVE_MS = 30000;
@@ -1821,6 +1823,10 @@ function renderMap() {
         '<span><i class="lg today"></i>สแกน/ย้ายวันนี้</span><span><i class="lg cur"></i>Location ปัจจุบัน</span>' +
         '<span><i class="lg hot"></i>เคลื่อนไหวใน 1 ชม.</span><span><i class="lg latest"></i>ล่าสุด</span>' +
         (MAP.trail ? '<span><i class="lg-trail"></i><i class="trail-badge">1</i>' + TRAIL_N + ' Action ล่าสุด เรียงตามเวลา (1 = ล่าสุด, จาง = เก่ากว่า)</span><span><i class="lg-move"></i>ย้ายของ: ต้นทาง → ปลายทาง</span>' : '') + '</div>' +
+      '<div class="map-search ac-wrap"><input id="mapQ" class="field" placeholder="🔍 ค้นหาของ: Lot / รหัส / ชื่อ / Location (พิมพ์บางส่วนได้)" autocomplete="off" value="' + esc(MAP.q) + '">' +
+        '<button type="button" id="mapQx" class="map-qx' + (MAP.q ? '' : ' hidden') + '" title="ล้างการค้นหา">✕</button>' +
+        '<div id="mapQSug" class="ac-list hidden"></div></div>' +
+      '<div id="mapFind"></div>' +
       '<div id="rpPanel"></div>' +
     '</section>' +
     '<div id="mapRecent"></div><div id="mapOut"></div><div id="rpDock" class="rp-dock"></div>';
@@ -1838,6 +1844,7 @@ function renderMap() {
     toast(MAP.live ? 'เปิดอัปเดตอัตโนมัติ (ทุก 30 วินาที)' : 'ปิดอัปเดตอัตโนมัติ');
   };
   $('mapTrail').onclick = function () { MAP.trail = !MAP.trail; store('pda_map_trail', MAP.trail ? '1' : '0'); renderMap(); };
+  bindMapSearch();
   renderRpPanel();
   if (MAP.data) renderMapGrid();
   loadMap();
@@ -1848,7 +1855,8 @@ function loadMap(manual) {
   if (!apiUrl()) { MAP.err = 'ยังไม่ได้ตั้งค่า API URL (กด ⚙)'; renderMapGrid(); return; }
   MAP.loading = true;
   if ($('mapReload')) $('mapReload').disabled = true;
-  api('getLocationMap').then(function (d) {
+  api('getLocationMap', { sig: MAP.itemsSig }).then(function (d) {
+    if (d.items) { MAP.items = d.items; MAP.itemsSig = d.sig || ''; storeJson('pda_map_items', d.items); store('pda_map_sig', MAP.itemsSig); }
     // ช่องที่มีความเคลื่อนไหวใหม่ตั้งแต่โหลดครั้งก่อน → กระพริบให้เห็น
     var old = MAP.data && MAP.data.map, fresh = {};
     if (old) Object.keys(d.map || {}).forEach(function (code) {
@@ -1890,6 +1898,164 @@ setInterval(function () {
 // กลับมาเปิดหน้าจอ (ปลดล็อกมือถือ / สลับแท็บกลับมา) → โหลดทันทีถ้าข้อมูลเก่าเกิน 30 วินาที
 document.addEventListener('visibilitychange', function () { if (mapLiveDue()) loadMap(); });
 
+// ===== ค้นหาบนผัง: "ของอยู่ไหน" + FIFO (ของเข้าก่อน = ลำดับ 1) =====
+// ค้นจากรายการกล่องที่โหลดมากับผัง (อัปเดตทุกรอบ 30 วินาที) + รายการรอส่งในเครื่อง → ผลขึ้นทันที
+function mapAllItems() {
+  var out = MAP.items.map(function (r) { return { loc: r[0], part: String(r[1] || ''), lot: String(r[2] || ''), at: r[3], qty: r[4], unit: r[5] }; });
+  S.recent.forEach(function (r) {
+    if (r.status === 'pending' && r.location) out.push({ loc: r.location, part: String(r.part_code || r.qr_raw || ''), lot: String(r.lot_no || ''), at: String(r.scanned_at || '').slice(0, 16), qty: r.qty, unit: r.unit, pending: true });
+  });
+  return out;
+}
+function mapIsLocQ(q) { return /^[A-Z]{2}-?\d/.test(q) || /^[A-Z]{2}-/.test(q); }
+function mapFind() {
+  var q = String(MAP.q || '').trim().toUpperCase(); if (!q) return null;
+  var hits = [];
+  if (mapIsLocQ(q)) {
+    // CO1 / CO-1 → CO-01 · CO12 → CO-12 (ชั้นวางเป็นเลข 2 หลัก)
+    var qq = q.replace(/^([A-Z]{2})-?(\d)(?!\d)/, '$1-0$2').replace(/^([A-Z]{2})(\d)/, '$1-$2');
+    var codes = (window.LOCATIONS || []).filter(function (c) { return c.indexOf(qq) === 0; });
+    var set = {}; codes.forEach(function (c) { set[c] = 1; });
+    hits = mapAllItems().filter(function (it) { return set[it.loc]; });
+    var res = mapFindGroup(hits);
+    codes.forEach(function (c) { if (!res.cells[c]) res.cells[c] = { n: 0, rank: 99, items: [] }; });
+    res.locMode = true; res.locCount = codes.length;
+    return res;
+  }
+  hits = mapAllItems().filter(function (it) {
+    if (it.lot.toUpperCase().indexOf(q) >= 0 || it.part.toUpperCase().indexOf(q) >= 0) return true;
+    var b = bomInfo(it.part);
+    return !!(b && ((b.name || '').toUpperCase().indexOf(q) >= 0 || (b.spec || '').toUpperCase().indexOf(q) >= 0));
+  });
+  return mapFindGroup(hits);
+}
+// รวมผลตามช่อง · เรียงช่องตามกล่องที่เข้าเก่าสุดก่อน (FIFO)
+function mapFindGroup(hits) {
+  var cells = {}, list = [];
+  hits.forEach(function (it) {
+    var c = cells[it.loc];
+    if (!c) { c = cells[it.loc] = { loc: it.loc, n: 0, items: [], oldest: it.at || '9' }; list.push(c); }
+    c.n++; c.items.push(it);
+    if ((it.at || '9') < c.oldest) c.oldest = it.at || '9';
+  });
+  list.sort(function (a, b) { return a.oldest < b.oldest ? -1 : a.oldest > b.oldest ? 1 : a.loc < b.loc ? -1 : 1; });
+  list.forEach(function (c, i) {
+    c.rank = i + 1;
+    c.items.sort(function (a, b) { return (a.at || '9') < (b.at || '9') ? -1 : 1; });
+  });
+  var zones = {};
+  list.forEach(function (c) { var z = c.loc.split('-')[0]; zones[z] = (zones[z] || 0) + c.n; });
+  return { cells: cells, list: list, total: hits.length, zones: zones };
+}
+function renderMapFind(find) {
+  var el = $('mapFind'); if (!el) return;
+  if ($('mapQx')) $('mapQx').classList.toggle('hidden', !MAP.q);
+  if (!find) { el.innerHTML = ''; return; }
+  var q = MAP.q.trim();
+  if (!find.list.length) {
+    el.innerHTML = '<div class="find-box"><div class="find-sum">' + (find.locMode
+      ? 'Location <b>' + esc(q.toUpperCase()) + '</b>: ' + (find.locCount ? find.locCount + ' ช่อง · ว่างทั้งหมด' : 'ไม่พบ Location นี้')
+      : 'ไม่พบ "<b>' + esc(q) + '</b>" ในคลัง') + '</div></div>';
+    return;
+  }
+  var zs = Object.keys(find.zones).sort();
+  var shownCells = MAP.findAll ? find.list : find.list.slice(0, 8);
+  el.innerHTML = '<div class="find-box">' +
+    '<div class="find-sum">พบ <b>' + find.total + '</b> กล่อง ใน <b>' + find.list.length + '</b> ช่อง' +
+      (zs.length > 1 || !mapZoneShown(zs[0]) ? ' · ' + zs.map(function (z) {
+        return '<button type="button" class="find-zone' + (mapZoneShown(z) ? ' on' : '') + '" data-fz="' + z + '">' + esc(z) + ' ' + find.zones[z] + '</button>';
+      }).join('') : '') + '</div>' +
+    (find.locMode ? '' : '<div class="muted small">เรียงตาม FIFO: <i class="fifo-badge first inline">1</i> = ของเข้าก่อน ควรหยิบก่อน</div>') +
+    '<div class="find-list">' + shownCells.map(function (c) {
+      var it = c.items[0], b = bomInfo(it.part) || {}, lots = {};
+      c.items.forEach(function (x) { if (x.lot) lots[x.lot] = 1; });
+      var lotList = Object.keys(lots);
+      return '<button type="button" class="find-item" data-fc="' + esc(c.loc) + '">' +
+        (find.locMode ? '' : '<i class="fifo-badge' + (c.rank === 1 ? ' first' : '') + ' inline">' + c.rank + '</i>') +
+        '<span class="find-main"><span class="find-top"><span class="loc-pill">' + esc(c.loc) + '</span> <b>' + c.n + '</b> กล่อง' +
+          (c.items.some(function (x) { return x.pending; }) ? ' <span class="tag pending">รอส่ง</span>' : '') + '</span>' +
+        '<span class="find-sub">' + markQ(it.part, q) + (b.name ? ' · ' + markQ(b.name, q) : '') +
+          (lotList.length ? ' · Lot ' + lotList.slice(0, 2).map(function (l) { return markQ(l, q); }).join(', ') + (lotList.length > 2 ? ' +' + (lotList.length - 2) : '') : '') + '</span>' +
+        '<span class="find-sub muted">เข้า ' + esc(fmtWhen(it.at)) + '</span></span></button>';
+    }).join('') + '</div>' +
+    (find.list.length > 8 ? '<button type="button" class="btn small" id="findMore">' + (MAP.findAll ? 'ย่อ' : 'ดูทั้งหมด ' + find.list.length + ' ช่อง') + '</button>' : '') +
+  '</div>';
+  Array.prototype.forEach.call(el.querySelectorAll('[data-fz]'), function (b) {
+    b.onclick = function () { MAP.zone = b.getAttribute('data-fz'); renderMap(); };
+  });
+  Array.prototype.forEach.call(el.querySelectorAll('[data-fc]'), function (b) {
+    b.onclick = function () { mapGotoCell(b.getAttribute('data-fc')); };
+  });
+  if ($('findMore')) $('findMore').onclick = function () { MAP.findAll = !MAP.findAll; renderMapGrid(); };
+}
+function mapGotoCell(code) {
+  var z = code.split('-')[0];
+  if (!mapZoneShown(z)) { MAP.zone = z; renderMap(); }
+  setTimeout(function () {
+    var c = document.querySelector('[data-cell="' + code + '"]'); if (!c) return;
+    c.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+    c.classList.remove('fresh'); void c.offsetWidth; c.classList.add('fresh');
+  }, 60);
+}
+// แนะนำตอนพิมพ์: Lot / รหัส ที่มีอยู่ในคลังจริง (พร้อมจำนวนกล่อง) — prefix ก่อน แล้วค่อยที่มีคำอยู่ข้างใน
+function mapSuggest(q) {
+  q = String(q || '').trim().toUpperCase(); if (!q || mapIsLocQ(q)) return [];
+  var lots = {}, parts = {};
+  mapAllItems().forEach(function (it) {
+    if (it.lot) { var l = lots[it.lot] || (lots[it.lot] = { kind: 'lot', value: it.lot, part: it.part, n: 0 }); l.n++; }
+    if (it.part) { var p = parts[it.part] || (parts[it.part] = { kind: 'part', value: it.part, n: 0 }); p.n++; }
+  });
+  function pick(obj, max, alsoName) {
+    var pre = [], mid = [];
+    Object.keys(obj).forEach(function (k) {
+      var i = k.toUpperCase().indexOf(q);
+      if (i === 0) pre.push(obj[k]);
+      else if (i > 0) mid.push(obj[k]);
+      else if (alsoName) { var b = bomInfo(k); if (b && ((b.name || '').toUpperCase().indexOf(q) >= 0 || (b.spec || '').toUpperCase().indexOf(q) >= 0)) mid.push(obj[k]); }
+    });
+    return pre.concat(mid).slice(0, max);
+  }
+  var L = pick(lots, 6, false), P = pick(parts, L.length >= 4 ? 3 : 6, true);
+  return L.concat(P);
+}
+function bindMapSearch() {
+  var inp = $('mapQ'), box = $('mapQSug'), timer = 0; if (!inp) return;
+  function hide() { box.classList.add('hidden'); box.innerHTML = ''; }
+  function apply(v) {
+    MAP.q = v; MAP.findAll = false;
+    renderMapGrid();
+    // ผลอยู่โซนอื่นทั้งหมด → สลับไปโซนแรกที่เจอ
+    var f = mapFind();
+    if (f && f.list.length && !f.list.some(function (c) { return mapZoneShown(c.loc.split('-')[0]); })) { MAP.zone = f.list[0].loc.split('-')[0]; renderMap(); }
+  }
+  function show() {
+    var list = mapSuggest(inp.value), q = inp.value.trim();
+    if (!list.length || (list.length === 1 && list[0].value.toUpperCase() === q.toUpperCase())) { hide(); return; }
+    box.innerHTML = list.map(function (it) {
+      var b = bomInfo(it.kind === 'lot' ? it.part : it.value) || {};
+      return '<button type="button" class="ac-item" data-v="' + esc(it.value) + '">' +
+        '<span class="ac-code"><span class="ac-kind' + (it.kind === 'part' ? ' part' : '') + '">' + (it.kind === 'lot' ? 'Lot' : 'รหัส') + '</span> ' + markQ(it.value, q) + '</span>' +
+        '<span class="ac-name">' + (it.kind === 'lot' ? esc(it.part || '') + (b.name ? ' · ' : '') : '') + (b.name ? markQ(b.name, q) : '') + ' · ' + it.n + ' กล่อง</span></button>';
+    }).join('');
+    box.classList.remove('hidden');
+    Array.prototype.forEach.call(box.querySelectorAll('.ac-item'), function (b) {
+      b.onmousedown = function (e) { e.preventDefault(); };
+      b.onclick = function () { inp.value = b.getAttribute('data-v'); hide(); apply(inp.value); inp.blur(); };
+    });
+  }
+  inp.addEventListener('input', function () {
+    show(); clearTimeout(timer);
+    timer = setTimeout(function () { apply(inp.value); }, 200);
+  });
+  inp.addEventListener('focus', function () { if (inp.value.trim()) show(); });
+  inp.addEventListener('blur', function () { setTimeout(hide, 150); });
+  inp.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); hide(); clearTimeout(timer); apply(inp.value); inp.blur(); }
+    else if (e.key === 'Escape') { hide(); inp.value = ''; apply(''); }
+  });
+  $('mapQx').onclick = function () { inp.value = ''; hide(); apply(''); };
+}
+
 // รายการในเครื่องที่ยังไม่ได้ส่งขึ้นเซิร์ฟเวอร์ → นับรวมในผังด้วย
 function mapPendingByLoc() {
   var out = {};
@@ -1913,6 +2079,8 @@ function renderMapGrid() {
   renderMapRecent();
   var latestLoc = (MAP.data.recent && MAP.data.recent[0]) ? (MAP.data.recent[0].to || MAP.data.recent[0].from) : '';
   var hotSince = Date.now() - RECENT_MIN * 60000;
+  var find = mapFind(); // ผลค้นหา (null = ไม่ได้ค้นหา)
+  renderMapFind(find);
   // สรุปทั้งคลัง + โซนนี้
   var shown = mapShown();
   var all = 0, used = 0, usedToday = 0, zAll = 0, zUsed = 0, zToday = 0;
@@ -1944,7 +2112,10 @@ function renderMapGrid() {
         if (i.last && bkkMs(i.last) >= hotSince) cls += ' hot';
         if (code === latestLoc) cls += ' latest';
         if (MAP.fresh[code]) cls += ' fresh';
-        return '<td><button class="cell ' + cls + '" data-cell="' + code + '" title="' + code + (i.last ? ' · ล่าสุด ' + esc(i.last) : '') + '">' + (show > 1 ? show : '') + '</button></td>';
+        var fc = find && find.cells[code];
+        if (find) cls += fc ? ' hit' : ' dim';
+        return '<td><button class="cell ' + cls + '" data-cell="' + code + '" title="' + code + (fc ? ' · พบ ' + fc.n + ' กล่อง · FIFO ลำดับ ' + fc.rank : '') + (i.last ? ' · ล่าสุด ' + esc(i.last) : '') + '">' +
+          (fc ? (fc.n > 1 ? fc.n : '') + (fc.rank <= 20 && !find.locMode ? '<i class="fifo-badge' + (fc.rank === 1 ? ' first' : '') + '">' + fc.rank + '</i>' : '') : (show > 1 ? show : '')) + '</button></td>';
       }).join('') + '</tr>';
     }).join('');
     return '<div class="rack"><div class="rack-head"><b>' + esc(zone + '-' + rk) + '</b><span class="muted small">' + rUsed + ' / ' + rAll + '</span></div>' +
@@ -1984,7 +2155,7 @@ function mapActions() {
 function mapTrailPaint() {
   var out = $('mapOut'); if (!out) return;
   var old = $('trailSvg'); if (old) old.parentNode.removeChild(old);
-  if (!MAP.trail || !MAP.data || (RP.open && RP.events && RP.events.length)) return;
+  if (!MAP.trail || !MAP.data || MAP.q || (RP.open && RP.events && RP.events.length)) return;
   var list = mapActions(); if (!list.length) return;
   var box = out.getBoundingClientRect();
   function pt(code) {

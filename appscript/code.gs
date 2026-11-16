@@ -262,12 +262,14 @@ function listScans(filter) {
 }
 
 /** สรุปต่อ Location สำหรับหน้าผัง: จำนวนกล่องที่ใช้งานอยู่ / สแกนวันนี้ / สแกนล่าสุดเมื่อไหร่ โดยใคร */
-function getLocationMap() {
+function getLocationMap(opt) {
+  opt = opt || {};
   const today = workShift_(fmt_(new Date())).date; // "วันนี้" = วันทำงาน (ตัดวัน 08:00)
   const rows = readAll_(sheet_()).map(toClient_);
-  const map = {};
+  const map = {}, items = [];
   rows.forEach(function (r) {
     if (r.status === 'deleted' || !r.location) return;
+    items.push([r.location, r.part_code, r.lot_no, String(r.scanned_at).slice(0, 16), r.qty, r.unit]); // ใช้ค้นหาบนผัง + FIFO
     const m = map[r.location] || (map[r.location] = { n: 0, today: 0, last: '', by: '' });
     m.n++;
     const at = r.edited_at > r.scanned_at ? r.edited_at : r.scanned_at;
@@ -299,7 +301,16 @@ function getLocationMap() {
     if (actions.length === 10) break;
     actions.push({ at: e.at, first: e.at, ev: e.ev, from: e.from, to: e.to, loc: loc, part: e.part, by: e.by, n: 1 });
   }
-  return { today: today, map: map, recent: recent.slice(0, 30), actions: actions };
+  // รายการกล่องทุกช่อง: ส่งเฉพาะเมื่อเปลี่ยนจากที่เครื่องมีอยู่ (เทียบลายเซ็น) เพื่อประหยัดเน็ต
+  const sig = hashStr_(JSON.stringify(items)) + '-' + items.length;
+  const out = { today: today, map: map, recent: recent.slice(0, 30), actions: actions, sig: sig };
+  if (opt.sig !== sig) out.items = items;
+  return out;
+}
+function hashStr_(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h.toString(36);
 }
 
 /** ลำดับการเคลื่อนไหว (บันทึก / แก้ยอด / ย้าย / ลบ) ของช่วงวันทำงาน + กะ + คน — ใช้เล่นย้อนหลังในหน้าผัง (เก่า → ใหม่) */
