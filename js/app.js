@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261116-1821'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261116-1832'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -2031,6 +2031,7 @@ function mapFindGroup(hits) {
 }
 function renderMapFind(find) {
   var el = $('mapFind'); if (!el) return;
+  var top = document.querySelector('.map-top'); if (top) top.classList.toggle('tall', !!find);
   if ($('mapQx')) $('mapQx').classList.toggle('hidden', !MAP.q);
   if (!find) { el.innerHTML = ''; return; }
   var q = MAP.q.trim();
@@ -2214,7 +2215,8 @@ function renderMapGrid() {
   Array.prototype.forEach.call(out.querySelectorAll('.rack-scroll'), function (el, i) { if (el.scrollLeft) keepScroll[i] = el.scrollLeft; });
   out.innerHTML = (shown.length > 1 ? shown.map(function (z) {
     return '<div class="zone-col"><div class="zone-head">โซน ' + esc(z) + '</div>' + zoneHtml(z) + '</div>';
-  }).join('') : zoneHtml(MAP.zone)) + '<p class="muted small center">ตัวเลขในช่อง = จำนวนกล่อง (ถ้ามากกว่า 1) · แตะช่องเพื่อดูของในช่องนั้น</p>';
+  }).join('') : zoneHtml(MAP.zone)) + (KDV ? '<p class="muted small center">ตัวเลขในช่อง: ⚪ = จำนวนรายการใน Kingdee · 🟡 = จำนวนรายการที่ไม่ตรง · 🟣 = จำนวนรายการที่เกิน · แตะช่องเพื่อดูตารางเทียบ</p>'
+    : '<p class="muted small center">ตัวเลขในช่อง = จำนวนกล่อง (ถ้ามากกว่า 1) · แตะช่องเพื่อดูของในช่องนั้น</p>');
   Array.prototype.forEach.call(out.querySelectorAll('.rack-scroll'), function (el, i) { if (keepScroll[i]) el.scrollLeft = keepScroll[i]; });
   Array.prototype.forEach.call(out.querySelectorAll('[data-cell]'), function (b) {
     b.onclick = function () { (KDV ? openKdCell : openMapCell)(b.getAttribute('data-cell')); };

@@ -489,3 +489,5 @@ button.loc-pill { border: 1px solid var(--blue); font-family: inherit; font-size
 .kd-table th:first-child { width: 46%; }
 /* มือถือ: รายการในแผงไม่เป็นกล่องเลื่อนซ้อน (iPhone ลากแล้วเหมือนหน้าค้าง) */
 @media (max-width: 999px) { #kdList .find-list, #mapFind .find-list { max-height: none; overflow: visible; } }
+/* มือถือ: ส่วนบนของผังติดจอได้เฉพาะตอนเตี้ย — แท็บ Kingdee / ตอนมีผลค้นหา ส่วนบนสูงเกินจอ จะบังผัง → ให้เลื่อนตามหน้าปกติ */
+main.view-kd > .map-top, .map-top.tall { position: static; }
