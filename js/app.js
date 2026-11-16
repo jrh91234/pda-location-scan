@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261115-2259'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261116-1309'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -180,7 +180,7 @@ function renderScan() {
     if (inp.getAttribute('inputmode') === 'text') return; // พิมพ์เอง → รอ Enter
     scanIdleTimer = setTimeout(commitScanInput, SCAN_IDLE_MS);
   });
-  $('btnCam').onclick = function () { openCameraScanner(handleScan); };
+  $('btnCam').onclick = function () { openCameraScanner(handleScan, { onEach: camContinuous }); };
   $('btnType').onclick = function () {
     inp.setAttribute('inputmode', 'text');
     inp.blur(); setTimeout(function () { inp.focus(); }, 30);
@@ -341,6 +341,37 @@ function handleScan(raw) {
   setMsg('warn', (chk.fixed ? 'อ่านค่าซ้ำ 2 รอบในครั้งเดียว ระบบตัดให้เหลือ 1 แล้ว · ' : '') +
     (replaced ? 'แทนที่รายการก่อนหน้า (' + esc(replaced.part_code) + ') · ' : '') +
     (S.location ? 'ตรวจสอบแล้วกด <b>บันทึก</b>' : 'เลือก Location แล้วกด <b>บันทึก</b>'));
+}
+
+// โหมดสแกนต่อเนื่อง (กล้องเปิดค้าง): สแกน Location → ตั้งช่อง · สแกนกล่อง → บันทึกเข้าช่องปัจจุบันทันที (ไม่ต้องกดบันทึก)
+// คืน { cls: ok | warn | err | loc, html } เพื่อแสดงในรายการใต้กล้อง
+function camContinuous(raw) {
+  var chk = checkScan(raw), text = chk.text;
+  if (!text) return null;
+  var loc = asLocation(text);
+  if (loc) {
+    setLocation(loc); beep(true);
+    setMsg('ok', '📍 Location: <b>' + esc(loc) + '</b>');
+    return { cls: 'loc', html: '📍 ตั้ง Location เป็น <b>' + esc(loc) + '</b>' };
+  }
+  if (chk.error) { beep(false); return { cls: 'err', html: '❌ ' + esc(chk.error) }; }
+  if (!S.user) { beep(false); return { cls: 'err', html: '❌ ยังไม่ได้ใส่ชื่อผู้สแกน — ปิดกล้องแล้วใส่ชื่อก่อน' }; }
+  if (!S.location) { beep(false); return { cls: 'err', html: '❌ ยังไม่ได้เลือก Location — <b>สแกน QR ของ Location ก่อน</b>' }; }
+  var p = parseQr(text);
+  var d = { qr_raw: p.qr_raw, part_code: p.part_code, lot_no: p.lot_no, qty: p.qty, unit: p.unit, pkg_ref: p.pkg_ref,
+            scanned_at: new Date().toISOString(), dupChecked: false, dup: null };
+  var dup = draftDup(d);
+  if (dup) {
+    beep(false);
+    return { cls: 'err', html: '⚠ <b>' + esc(p.part_code || p.qr_raw) + '</b> ซ้ำ — บันทึกแล้วที่ <b>' + esc(dup.location) + '</b> ไม่ได้บันทึกซ้ำ' };
+  }
+  S.draft = d;
+  saveDraft(); // บันทึก + ปี๊บ + ส่งขึ้นเซิร์ฟเวอร์เบื้องหลัง
+  var b = bomInfo(p.part_code) || {};
+  return { cls: p.qty === '' ? 'warn' : 'ok',
+    html: '✔ <b>' + esc(p.part_code || p.qr_raw) + '</b>' + (b.name ? ' <span class="muted">' + esc(b.name) + '</span>' : '') +
+      (p.qty !== '' ? ' × ' + esc(fmtQty(p.qty, p.unit)) : ' <span class="warn-text">(ไม่มียอด — แก้ทีหลังได้)</span>') +
+      (p.lot_no ? ' · Lot ' + esc(p.lot_no) : '') + ' → <b>' + esc(S.location) + '</b>' };
 }
 
 function findSavedDuplicate(qr) {
@@ -1347,19 +1378,55 @@ function grabFrame(src, full) {
   return camCanvas;
 }
 
-function openCameraScanner(onResult) {
+function openCameraScanner(onResult, opts) {
+  opts = opts || {};
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     toast('เบราว์เซอร์นี้เปิดกล้องไม่ได้ (ต้องเปิดผ่าน https)', 3500); return;
   }
+  var canCont = !!opts.onEach;
   openModal('<h3>สแกนด้วยกล้อง</h3>' +
-    '<div class="cam-wrap"><video id="camV" playsinline muted autoplay></video><div class="cam-frame" id="camFrame"></div></div>' +
+    (canCont ? '<div class="cam-mode"><label class="cam-switch"><input type="checkbox" id="camCont"' + (store('pda_cam_cont') === '1' ? ' checked' : '') + '>' +
+      '<span class="cam-switch-ui"></span>🔁 สแกนต่อเนื่อง</label><span class="small">Location: <span class="loc-pill" id="camLoc"></span></span></div>' : '') +
+    '<div class="cam-wrap" id="camWrap"><video id="camV" playsinline muted autoplay></video><div class="cam-frame" id="camFrame"></div>' +
+      '<div class="cam-flash" id="camFlash"></div><div class="cam-count hidden" id="camCount"></div></div>' +
     '<div class="cam-tools" id="camTools"></div>' +
     '<p class="center small" id="camHint">กำลังเปิดกล้อง…</p>' +
+    (canCont ? '<div class="cam-log" id="camLog"></div>' : '') +
     '<p class="muted small center" id="camInfo"></p>' +
     '<div class="actions"><button class="btn" id="camClose">ปิด</button></div>', true);
   var video = $('camV'), stream = null, done = false, track = null;
+  var log = [], saved = 0, lastText = '', lastAt = 0, ready = false;
   function stop() { done = true; if (stream) stream.getTracks().forEach(function (t) { t.stop(); }); }
-  $('camClose').onclick = function () { stop(); closeModal(); };
+  function cont() { return canCont && $('camCont') && $('camCont').checked; }
+  $('camClose').onclick = function () {
+    stop(); closeModal();
+    if (saved) toast('บันทึกจากกล้อง ' + saved + ' รายการ', 2500);
+  };
+  function hint() {
+    var el = $('camHint'); if (!el || !ready) return;
+    el.innerHTML = cont()
+      ? '<b>โหมดต่อเนื่อง:</b> สแกน QR Location ก่อน แล้วสแกนกล่องต่อกันได้เลย — <b>บันทึกอัตโนมัติ</b> ไม่ต้องกดบันทึก'
+      : 'เล็ง QR ให้อยู่ในกรอบ' + (IS_IOS ? ' · <b>ถือห่างประมาณ 20–30 ซม.</b>' : '');
+  }
+  function renderCont() {
+    if (!canCont) return;
+    var on = cont();
+    $('camWrap').classList.toggle('cont', on);
+    if ($('camLoc')) { $('camLoc').textContent = S.location || 'ยังไม่เลือก'; $('camLoc').classList.toggle('none', !S.location); }
+    var c = $('camCount'); if (c) { c.textContent = '✔ ' + saved; c.classList.toggle('hidden', !on || !saved); }
+    var el = $('camLog');
+    if (el) el.innerHTML = on ? (log.length ? log.slice(0, 6).map(function (r, i) {
+      return '<div class="cam-log-row ' + r.cls + (i === 0 ? ' new' : '') + '">' + r.html + '</div>';
+    }).join('') : '<div class="muted small center">ยังไม่มีรายการ</div>') : '';
+    $('camClose').textContent = on && saved ? 'เสร็จ (บันทึก ' + saved + ' รายการ)' : 'ปิด';
+    hint();
+  }
+  if (canCont) $('camCont').onchange = function () { store('pda_cam_cont', this.checked ? '1' : '0'); renderCont(); };
+  renderCont();
+  function flash(cls) {
+    var f = $('camFlash'); if (!f) return;
+    f.className = 'cam-flash ' + cls; void f.offsetWidth; f.classList.add('on');
+  }
 
   var cam = navigator.mediaDevices.getUserMedia({
     video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false
@@ -1373,7 +1440,7 @@ function openCameraScanner(onResult) {
     return video.play().then(function () {
       sizeFrame();
       setupCamTools(track);
-      if ($('camHint')) $('camHint').innerHTML = 'เล็ง QR ให้อยู่ในกรอบ' + (IS_IOS ? ' · <b>ถือห่างประมาณ 20–30 ซม.</b>' : '');
+      ready = true; hint();
       var all = engines.slice(), n = 0, lastInfo = 0;
       // ข้อมูลวินิจฉัย: ตัวอ่าน · จำนวนเฟรมที่อ่าน · ข้อผิดพลาด
       function info(force) {
@@ -1401,7 +1468,11 @@ function openCameraScanner(onResult) {
         e.detect(src).then(function (text) {
           e.fails = 0;
           if (done) return;
-          if (text) { e.hits++; stop(); closeModal(); onResult(text); return; }
+          if (text) {
+            e.hits++;
+            if (cont()) { onCont(text); return; }
+            stop(); closeModal(); onResult(text); return;
+          }
           info(); next();
         }, function (err) {
           e.errors++; e.fails++; e.lastErr = (err && (err.message || err.name)) || String(err);
@@ -1409,6 +1480,20 @@ function openCameraScanner(onResult) {
           if (e.fails >= 5 && engines.length > 1) engines.splice(engines.indexOf(e), 1);
           info(true); setTimeout(next, 50);
         });
+      }
+      // โหมดต่อเนื่อง: QR เดิมที่ยังอยู่หน้ากล้องไม่นับซ้ำ (ต้องหายไปจากกล้องอย่างน้อย 2.5 วินาที) · พักสั้นๆ หลังอ่านได้
+      function onCont(text) {
+        var now = Date.now();
+        if (text === lastText && now - lastAt < 2500) { lastAt = now; setTimeout(next, 120); return; }
+        lastText = text; lastAt = now;
+        var r = opts.onEach(text);
+        if (r) {
+          log.unshift(r); if (log.length > 30) log.pop();
+          if (r.cls === 'ok' || r.cls === 'warn') saved++;
+          flash(r.cls === 'err' ? 'err' : r.cls === 'loc' ? 'loc' : 'ok');
+          renderCont();
+        }
+        setTimeout(next, 700);
       }
       next();
     });
