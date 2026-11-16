@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261116-1316'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261116-1541'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -1953,6 +1953,7 @@ function renderMapGrid() {
   }).join('');
   }
   out.classList.toggle('pair', shown.length > 1);
+  out.classList.toggle('stack', shown.length === 1 && shown[0] === 'CP'); // CP = ชั้นซ้อนกันขึ้นไป → เรียงแนวตั้งแถวเดียว
   // เก็บตำแหน่งเลื่อนแนวนอนของแต่ละแถว (มือถือ) ไว้ เพื่อไม่ให้เด้งกลับตอนอัปเดตอัตโนมัติ
   var keepScroll = {};
   Array.prototype.forEach.call(out.querySelectorAll('.rack-scroll'), function (el, i) { if (el.scrollLeft) keepScroll[i] = el.scrollLeft; });
