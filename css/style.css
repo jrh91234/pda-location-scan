@@ -504,3 +504,16 @@ main.view-kd > .map-top, .map-top.tall { position: static; }
 .cell.kd-moved { outline: 2px dashed #f97316; outline-offset: 1px; z-index: 1; }
 .lg.kd-moved-lg { background: #fff; border: 2px dashed #f97316; }
 .kd-scroll .find-list { max-height: none; }
+
+/* หมายเหตุ (หน้ากรอกเอง) */
+.note-wrap { position: relative; }
+.note-dd { display: flex; align-items: center; justify-content: space-between; gap: 6px; text-align: left; cursor: pointer; min-height: 44px; background: #fff; }
+.note-dd.open { border-color: #2563eb; }
+.note-caret { color: #667085; }
+.note-list { position: absolute; left: 0; right: 0; top: 100%; z-index: 30; background: #fff; border: 1px solid #d0d5dd; border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.12); padding: 4px; margin-top: 2px; }
+.note-opt { display: flex; align-items: center; gap: 10px; padding: 10px 8px; border-radius: 8px; font-weight: 500; margin: 0; cursor: pointer; }
+.note-opt:hover { background: #f2f4f7; }
+.note-opt input { width: 20px; height: 20px; margin: 0; }
+.note-chip { display: inline-block; background: #eef4ff; color: #1d4ed8; border-radius: 6px; padding: 1px 7px; margin: 1px 4px 1px 0; font-size: 13px; font-weight: 600; }
+#mfNote { margin-top: 6px; }
+.note-v { color: #b54708; }

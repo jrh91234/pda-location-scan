@@ -9,7 +9,7 @@
 const SHEET_NAME = 'Scans';
 const HEADERS = ['scan_id', 'scanned_at', 'saved_at', 'location', 'qr_raw', 'part_code', 'lot_no', 'qty', 'unit',
                  'pkg_ref', 'scanned_by', 'device', 'status', 'deleted_by', 'deleted_at', 'delete_reason',
-                 'qty_original', 'edited_by', 'edited_at', 'edit_note', 'location_original'];
+                 'qty_original', 'edited_by', 'edited_at', 'edit_note', 'location_original', 'note'];
 // คอลัมน์ที่ต้องเก็บเป็นข้อความ (กันเลข 0 นำหน้าหาย / กัน Sheets แปลงเป็นวันที่หรือตัวเลข)
 const TEXT_COLS = ['scan_id', 'location', 'location_original', 'qr_raw', 'part_code', 'lot_no', 'pkg_ref', 'scanned_by', 'device'];
 const TZ = 'Asia/Bangkok';
@@ -106,7 +106,7 @@ function toClient_(o) {
     deleted_at: fmt_(o.deleted_at), delete_reason: String(o.delete_reason || ''),
     qty_original: o.qty_original === '' || o.qty_original == null ? '' : Number(o.qty_original),
     edited_by: String(o.edited_by || ''), edited_at: fmt_(o.edited_at), edit_note: String(o.edit_note || ''),
-    location_original: String(o.location_original || '')
+    location_original: String(o.location_original || ''), note: String(o.note || '')
   };
 }
 
@@ -190,7 +190,8 @@ function saveScans(items) {
         qty: qty, unit: clean_(it.unit, 10), pkg_ref: clean_(it.pkg_ref, 80),
         scanned_by: clean_(it.scanned_by, 60), device: clean_(it.device, 60),
         status: 'active', deleted_by: '', deleted_at: '', delete_reason: '',
-        qty_original: '', edited_by: '', edited_at: '', edit_note: '', location_original: ''
+        qty_original: '', edited_by: '', edited_at: '', edit_note: '', location_original: '',
+        note: clean_(it.note, 200)
       };
       toAppend.push(HEADERS.map(function (h) { return rec[h]; }));
       byId[id] = rec;
@@ -203,7 +204,7 @@ function saveScans(items) {
       logEvents_(results.filter(function (r) { return r.result === 'saved'; }).map(function (r) {
         const x = r.record;
         return { scan_id: x.scan_id, event: 'create', part_code: x.part_code, qr_raw: x.qr_raw,
-                 location_to: x.location, qty_to: x.qty, unit: x.unit, by: x.scanned_by, at: now, note: x.device ? 'เครื่อง ' + x.device : '' };
+                 location_to: x.location, qty_to: x.qty, unit: x.unit, by: x.scanned_by, at: now, note: [x.device ? 'เครื่อง ' + x.device : '', x.note ? 'หมายเหตุ: ' + x.note : ''].filter(String).join(' · ') };
       }));
     }
     return results;

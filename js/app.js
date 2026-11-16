@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261116-2120'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261116-2245'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -60,6 +60,7 @@ function itemLines(r, qtyHtml, locHtml) {
     line('จำนวน', qtyHtml !== undefined ? qtyHtml : esc(fmtQty(r.qty, r.unit))) +
     line('Lot', (r.lot_no ? esc(r.lot_no) : '') + (r.pkg_ref ? ' <span class="muted small">· Pkg ' + esc(r.pkg_ref) + '</span>' : '')) +
     line('Location', locHtml !== undefined ? locHtml : (r.location ? '<span class="loc-pill">' + esc(r.location) + '</span>' : '')) +
+    (r.note ? line('หมายเหตุ', '<span class="note-v">📝 ' + esc(r.note) + '</span>') : '') +
   '</div>';
 }
 
@@ -458,7 +459,7 @@ function flush(manual) {
   S.syncing = true; renderSync();
   var payload = batch.map(function (r) {
     return { scan_id: r.scan_id, scanned_at: r.scanned_at, location: r.location, qr_raw: r.qr_raw, part_code: r.part_code,
-      lot_no: r.lot_no, qty: r.qty, unit: r.unit, pkg_ref: r.pkg_ref, scanned_by: r.scanned_by, device: r.device };
+      lot_no: r.lot_no, qty: r.qty, unit: r.unit, pkg_ref: r.pkg_ref, scanned_by: r.scanned_by, device: r.device, note: r.note || '' };
   });
   api('saveScans', payload).then(function (results) {
     S.online = true;
@@ -1010,7 +1011,7 @@ var XLSX_COLS = [
   ['scanned_at', 'วันเวลาสแกน', 19], ['work_date', 'วันทำงาน', 11], ['shift', 'กะ', 6], ['location', 'Location', 12], ['part_code', 'รหัสสินค้า', 16], ['bom_name', 'Child Item Name', 32], ['bom_spec', 'Specification', 16], ['lot_no', 'Lot', 13],
   ['qty', 'จำนวน', 9], ['unit', 'หน่วย', 7], ['pkg_ref', 'Package', 10], ['scanned_by', 'ผู้สแกน', 14], ['device', 'เครื่อง', 10],
   ['status', 'สถานะ', 9], ['photos', 'จำนวนรูป', 8], ['location_original', 'Location เดิม', 12], ['qty_original', 'ยอดเดิม', 9],
-  ['edited_by', 'แก้ไขล่าสุดโดย', 14], ['edited_at', 'แก้ไขล่าสุดเมื่อ', 19], ['edit_note', 'เหตุผลแก้ไข', 20],
+  ['edited_by', 'แก้ไขล่าสุดโดย', 14], ['edited_at', 'แก้ไขล่าสุดเมื่อ', 19], ['edit_note', 'เหตุผลแก้ไข', 20], ['note', 'หมายเหตุ', 24],
   ['deleted_by', 'ลบโดย', 12], ['deleted_at', 'ลบเมื่อ', 19], ['delete_reason', 'เหตุผลลบ', 16], ['qr_raw', 'QR', 40], ['scan_id', 'scan_id', 38]
 ];
 
@@ -1625,6 +1626,33 @@ function setupCamTools(track) {
 // ======================= หน้ากรอกเอง =======================
 var manualSrc = null; // QR ที่ใช้เติมฟอร์ม (ถ้ารหัส/Lot/Pkg ไม่ถูกแก้ จะใช้ QR เดิมเพื่อกันบันทึกซ้ำ)
 var UNITS = ['EA', 'kg', 'm', 'roll', 'box', 'set'];
+var NOTE_PRESETS = ['ไม่มี QR code', 'ไม่รู้จำนวน', 'งานตัวอย่าง'];
+var NOTE_NOQTY = 'ไม่รู้จำนวน';
+function manualNotePicks() {
+  return Array.prototype.filter.call(document.querySelectorAll('#mfNoteList input:checked'), function (c) { return true; }).map(function (c) { return c.value; });
+}
+function manualNoteText() {
+  var t = $('mfNote') ? $('mfNote').value.trim() : '';
+  return manualNotePicks().concat(t ? [t] : []).join(', ');
+}
+function renderNoteSel() {
+  var el = $('mfNoteSel'); if (!el) return;
+  var p = manualNotePicks();
+  el.className = p.length ? '' : 'muted';
+  el.innerHTML = p.length ? p.map(function (n) { return '<span class="note-chip">' + esc(n) + '</span>'; }).join('') : 'เลือกหมายเหตุ (ได้หลายข้อ)';
+  if ($('mfQty')) $('mfQty').placeholder = p.indexOf(NOTE_NOQTY) >= 0 ? 'เว้นว่างได้' : '';
+}
+function bindManualNote() {
+  var dd = $('mfNoteDd'), list = $('mfNoteList');
+  dd.onclick = function (e) { e.stopPropagation(); list.classList.toggle('hidden'); dd.classList.toggle('open', !list.classList.contains('hidden')); };
+  list.addEventListener('click', function (e) { e.stopPropagation(); });
+  list.addEventListener('change', renderNoteSel);
+  document.addEventListener('click', function close() {
+    if (!document.body.contains(list)) { document.removeEventListener('click', close); return; }
+    list.classList.add('hidden'); dd.classList.remove('open');
+  });
+  renderNoteSel();
+}
 
 function renderManual() {
   $('main').innerHTML =
@@ -1643,6 +1671,12 @@ function renderManual() {
         '<div><label>จำนวน *</label><input id="mfQty" class="field big-num" inputmode="decimal" autocomplete="off"></div>' +
         '<div><label>หน่วย</label><select id="mfUnit" class="field">' + UNITS.map(function (u) { return '<option>' + u + '</option>'; }).join('') + '</select></div>' +
       '</div>' +
+      '<label>หมายเหตุ</label>' +
+      '<div class="note-wrap"><button type="button" class="field note-dd" id="mfNoteDd" aria-haspopup="listbox"><span id="mfNoteSel" class="muted">เลือกหมายเหตุ (ได้หลายข้อ)</span><span class="note-caret">▾</span></button>' +
+        '<div id="mfNoteList" class="note-list hidden" role="listbox" aria-multiselectable="true">' + NOTE_PRESETS.map(function (n) {
+          return '<label class="note-opt"><input type="checkbox" value="' + esc(n) + '"> ' + esc(n) + '</label>';
+        }).join('') + '</div></div>' +
+      '<input id="mfNote" class="field" autocomplete="off" maxlength="150" placeholder="พิมพ์หมายเหตุเพิ่มเติม (ถ้ามี)">' +
       '<div class="actions"><button class="btn" id="mfClear">ล้าง</button><button class="btn primary save-btn" id="mfSave">💾 บันทึก</button></div>' +
     '</section>' +
     '<div id="msg"></div>' +
@@ -1672,6 +1706,7 @@ function renderManual() {
   $('mfQty').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); saveManual(); } });
   $('mfClear').onclick = function () { clearManual(); part.focus(); };
   $('mfSave').onclick = saveManual;
+  bindManualNote();
   renderMsg(); renderSync(); renderRecent();
 }
 
@@ -1711,7 +1746,9 @@ function fillManualFromScan(raw) {
 }
 
 function clearManual() {
-  ['mfPart', 'mfLot', 'mfPkg', 'mfQty'].forEach(function (id) { if ($(id)) $(id).value = ''; });
+  ['mfPart', 'mfLot', 'mfPkg', 'mfQty', 'mfNote'].forEach(function (id) { if ($(id)) $(id).value = ''; });
+  Array.prototype.forEach.call(document.querySelectorAll('#mfNoteList input'), function (c) { c.checked = false; });
+  renderNoteSel();
   manualSrc = null;
   hideSuggest(); updatePartInfo();
 }
@@ -1793,7 +1830,9 @@ function saveManual() {
   var part = $('mfPart').value.trim().toUpperCase(), lot = $('mfLot').value.trim(), pkg = $('mfPkg').value.trim();
   var qty = parseQtyInput($('mfQty').value), unit = $('mfUnit').value;
   if (!part) { beep(false); toast('กรุณากรอกรหัสสินค้า'); $('mfPart').focus(); return; }
-  if (qty === null) { beep(false); toast('กรุณากรอกจำนวนเป็นตัวเลข'); $('mfQty').focus(); return; }
+  var note = manualNoteText(), noQty = manualNotePicks().indexOf(NOTE_NOQTY) >= 0;
+  if (qty === null && noQty && !$('mfQty').value.trim()) qty = '';
+  if (qty === null) { beep(false); toast(noQty ? 'จำนวนต้องเป็นตัวเลข หรือเว้นว่าง' : 'กรุณากรอกจำนวนเป็นตัวเลข (ถ้าไม่รู้ ให้เลือกหมายเหตุ "ไม่รู้จำนวน")'); $('mfQty').focus(); return; }
   var id = uid();
   var fromQr = manualSrc && manualSrc.part_code.toUpperCase() === part && manualSrc.lot_no === lot && manualSrc.pkg_ref === pkg;
   var qr = fromQr ? manualSrc.qr_raw : ['MANUAL', part, lot, qty, pkg, id.slice(0, 8)].join('|');
@@ -1802,13 +1841,13 @@ function saveManual() {
   var item = {
     scan_id: id, scanned_at: new Date().toISOString(), location: S.location,
     qr_raw: qr, part_code: part, lot_no: lot, qty: qty, unit: unit, pkg_ref: pkg,
-    scanned_by: S.user, device: S.device, status: 'pending'
+    scanned_by: S.user, device: S.device, status: 'pending', note: note
   };
   S.recent.unshift(item);
   saveRecent();
   clearManual();
   beep(true);
-  setMsg('ok', '✔ บันทึก <b>' + esc(part) + '</b> × ' + esc(fmtQty(qty, unit)) + ' → <b>' + esc(item.location) + '</b>', item.scan_id);
+  setMsg('ok', '✔ บันทึก <b>' + esc(part) + '</b> × ' + esc(qty === '' ? 'ไม่รู้จำนวน' : fmtQty(qty, unit)) + ' → <b>' + esc(item.location) + '</b>', item.scan_id);
   refreshScanParts();
   flush();
   $('mfPart').focus();
