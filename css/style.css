@@ -457,3 +457,7 @@ button.loc-pill { border: 1px solid var(--blue); font-family: inherit; font-size
 .cell.dim { opacity: .3; }
 .cell.hit { outline: 3px solid #f59e0b; outline-offset: -1px; z-index: 1; }
 .cell.hit.empty { background: #fff7e0; }
+
+/* แสงน้อย: ปุ่มไฟฉายกระพริบชวนกด */
+#camTorch.pulse { border-color: #e6a000; background: #fff1cc; animation: torchPulse 1s ease-in-out infinite; }
+@keyframes torchPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(230,160,0,.7); } 50% { box-shadow: 0 0 0 6px rgba(230,160,0,0); } }

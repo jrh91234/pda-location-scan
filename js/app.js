@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261116-1612'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261116-1642'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -1361,8 +1361,33 @@ function getDetectors() {
 
 var camCanvas = null;
 var camCropSide = 0; // ด้านของกรอบเล็งในหน่วยพิกเซลของภาพกล้อง (คำนวณจากกรอบที่เห็นบนจอ)
-// ตัดกรอบกลางภาพแบบเต็มความละเอียด (full = ทั้งภาพ ย่อไม่เกิน 1280 — ใช้สลับเป็นระยะเผื่อ QR อยู่นอกกรอบ)
-function grabFrame(src, full) {
+var camLuma = -1;    // ความสว่างเฉลี่ยในกรอบ (0–255) — ใช้เตือนแสงน้อย
+// แต่ละเฟรมสลับวิธีเตรียมภาพ เพื่อให้อ่านได้ทั้งตอนภาพชัด / เบลอ / แสงน้อย:
+// 0 = กรอบกลางเต็มความละเอียด · 1 = กรอบกลางย่อครึ่ง (ภาพเบลอ/สั่น ย่อแล้วขอบ QR คมขึ้น)
+// 2 = ย่อครึ่ง + เร่งความต่างสี (แสงน้อย ภาพหม่น) · 3 = ทั้งภาพ (เผื่อ QR อยู่นอกกรอบ)
+function grabVariant(src, v) {
+  if (v === 3) return grabFrame(src, true);
+  var c = grabFrame(src, false, v === 0 ? 1 : 0.5);
+  if (c && v === 2) stretchContrast(c);
+  return c;
+}
+// ยืดช่วงความสว่าง (ตัด 2% มืดสุด/สว่างสุด) → ขาวดำชัดขึ้นตอนแสงน้อย + วัดความสว่างเฉลี่ย
+function stretchContrast(c) {
+  var g = c.getContext('2d', { willReadFrequently: true }), img = g.getImageData(0, 0, c.width, c.height), d = img.data;
+  var hist = new Uint32Array(256), n = d.length / 4, sum = 0, i, y;
+  for (i = 0; i < d.length; i += 4) { y = (d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8; d[i] = y; hist[y]++; sum += y; }
+  camLuma = sum / n;
+  var lo = 0, hi = 255, acc = 0, cut = n * 0.02;
+  while (lo < 255 && (acc += hist[lo]) < cut) lo++;
+  acc = 0; while (hi > 0 && (acc += hist[hi]) < cut) hi--;
+  if (hi - lo < 8) return;
+  var lut = new Uint8ClampedArray(256), k = 255 / (hi - lo);
+  for (i = 0; i < 256; i++) lut[i] = (i - lo) * k;
+  for (i = 0; i < d.length; i += 4) { y = lut[d[i]]; d[i] = d[i + 1] = d[i + 2] = y; }
+  g.putImageData(img, 0, 0);
+}
+// ตัดกรอบกลางภาพ (scale = อัตราย่อ) · full = ทั้งภาพ ย่อไม่เกิน 1280
+function grabFrame(src, full, scale) {
   var w = src.videoWidth || src.width, h = src.videoHeight || src.height;
   if (!w || !h) return null;
   var sx = 0, sy = 0, sw = w, sh = h, ow, oh;
@@ -1370,7 +1395,7 @@ function grabFrame(src, full) {
   else {
     var side = camCropSide || Math.round(Math.min(w, h) * CROP_RATIO);
     sx = Math.round((w - side) / 2); sy = Math.round((h - side) / 2); sw = sh = side;
-    ow = oh = Math.min(side, 1000);
+    ow = oh = Math.round(Math.min(side, 1000) * (scale || 1));
   }
   camCanvas = camCanvas || document.createElement('canvas');
   camCanvas.width = ow; camCanvas.height = oh;
@@ -1454,6 +1479,18 @@ function openCameraScanner(onResult, opts) {
         }).join(' | ');
       }
       info(true);
+      // อ่านไม่ได้นานเกิน 4 วินาที → แนะนำวิธีแก้ (แสงน้อย = เปิดไฟฉาย)
+      var startAt = Date.now(), tipShown = '';
+      function lowLightTip() {
+        var el = $('camHint'); if (!el || cont()) return;
+        var dark = camLuma >= 0 && camLuma < 80, slow = Date.now() - startAt > 4000, torch = $('camTorch');
+        var tip = dark && torch ? 'dark' : slow ? 'slow' : '';
+        if (tip === tipShown) return; tipShown = tip;
+        if (torch) torch.classList.toggle('pulse', tip === 'dark' && !torch.classList.contains('active'));
+        if (tip === 'dark') el.innerHTML = '🌙 <b>แสงน้อย</b> — กด <b>🔦 ไฟฉาย</b> แล้วถือให้นิ่ง';
+        else if (tip === 'slow') el.innerHTML = 'ยังอ่านไม่ได้: <b>ถือให้นิ่ง</b> · ถอยออกเล็กน้อยให้ภาพชัด' + (torch ? ' · ที่มืดให้เปิด <b>🔦 ไฟฉาย</b>' : '') + ' · ให้ QR อยู่กลางกรอบ';
+        else hint();
+      }
       function next() {
         if (done) return;
         if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(function () { tick(); });
@@ -1462,7 +1499,7 @@ function openCameraScanner(onResult, opts) {
       function tick() {
         if (done) return;
         var e = engines[n++ % engines.length];
-        var src = e.src === 'video' ? video : grabFrame(video, e.src === 'full' || e.frames % 4 === 3);
+        var src = e.src === 'video' ? video : e.src === 'full' ? grabFrame(video, true) : grabVariant(video, e.frames % 4);
         if (!src) { next(); return; }
         e.frames++;
         e.detect(src).then(function (text) {
@@ -1473,7 +1510,7 @@ function openCameraScanner(onResult, opts) {
             if (cont()) { onCont(text); return; }
             stop(); closeModal(); onResult(text); return;
           }
-          info(); next();
+          info(); lowLightTip(); next();
         }, function (err) {
           e.errors++; e.fails++; e.lastErr = (err && (err.message || err.name)) || String(err);
           // ผิดพลาดติดกัน 5 ครั้ง → เลิกใช้ตัวนี้ (ถ้ายังมีตัวอื่นเหลือ)
@@ -1518,7 +1555,7 @@ function openCameraScanner(onResult, opts) {
       camCropSide = Math.min(Math.round(side / scale), vw, vh);
     }
   }
-  camCropSide = 0;
+  camCropSide = 0; camLuma = -1;
   video.addEventListener('loadedmetadata', sizeFrame);
   video.addEventListener('resize', sizeFrame);
   window.addEventListener('resize', function onR() { if (done) { window.removeEventListener('resize', onR); return; } sizeFrame(); });
@@ -1556,6 +1593,7 @@ function setupCamTools(track) {
     torchOn = !torchOn;
     track.applyConstraints({ advanced: [{ torch: torchOn }] }).catch(function () {});
     $('camTorch').classList.toggle('active', torchOn);
+    if (torchOn) $('camTorch').classList.remove('pulse');
   };
 }
 
