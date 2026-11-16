@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261116-1309'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261116-1316'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -1755,6 +1755,8 @@ function saveManual() {
 // แสดงทุก Location ตามแถวชั้นวาง (โซน → แถว → ช่อง 01–16 × ชั้น A/B) ว่าช่องไหนสแกนของเข้าไปแล้ว
 var MAP = { data: null, loading: false, zone: '', mode: 'all', err: '', more: false, trail: store('pda_map_trail') !== '0' };
 var TRAIL_N = 10;
+MAP.live = store('pda_map_live') !== '0'; MAP.loadedAt = 0; MAP.fresh = {};
+var MAP_LIVE_MS = 30000;
 var MAP_EV = { create: '🟢 บันทึก', qty: '🔵 แก้ยอด', move: '🟠 ย้าย', move_out: '🟠 ย้ายออก', delete: '🔴 ลบ', photo_add: '🖼 แนบรูป', photo_delete: '🗑 ลบรูป' };
 var RECENT_MIN = 60; // เคลื่อนไหวภายในกี่นาที = ติดจุดส้มในผัง
 
@@ -1810,6 +1812,8 @@ function renderMap() {
           '<button data-mode="all" class="' + (MAP.mode === 'all' ? 'active' : '') + '">ทั้งหมด</button>' +
           '<button data-mode="today" class="' + (MAP.mode === 'today' ? 'active' : '') + '">วันนี้</button>' +
         '</div>' +
+        '<button class="btn small live-btn' + (MAP.live ? ' active' : '') + '" id="mapLive" title="โหลดผังใหม่เองทุก 30 วินาที (เฉพาะตอนเปิดหน้าผังอยู่)">' +
+          '<i class="live-dot"></i>อัปเดตอัตโนมัติ</button><span id="mapAge" class="muted small map-age"></span>' +
         '<button class="btn small' + (MAP.trail ? ' active' : '') + '" id="mapTrail" title="แสดงลูกศร 10 Action ล่าสุด (บันทึก / ย้าย / แก้ยอด / ลบ)">➜ ' + TRAIL_N + ' Action ล่าสุด</button>' +
         '<button class="btn small" id="mapReload">🔄</button>' +
       '</div>' +
@@ -1827,6 +1831,12 @@ function renderMap() {
     b.onclick = function () { MAP.mode = b.getAttribute('data-mode'); renderMap(); };
   });
   $('mapReload').onclick = function () { loadMap(true); };
+  $('mapLive').onclick = function () {
+    MAP.live = !MAP.live; store('pda_map_live', MAP.live ? '1' : '0');
+    this.classList.toggle('active', MAP.live); mapAgeTick();
+    if (MAP.live && Date.now() - MAP.loadedAt > MAP_LIVE_MS) loadMap();
+    toast(MAP.live ? 'เปิดอัปเดตอัตโนมัติ (ทุก 30 วินาที)' : 'ปิดอัปเดตอัตโนมัติ');
+  };
   $('mapTrail').onclick = function () { MAP.trail = !MAP.trail; store('pda_map_trail', MAP.trail ? '1' : '0'); renderMap(); };
   renderRpPanel();
   if (MAP.data) renderMapGrid();
@@ -1839,14 +1849,46 @@ function loadMap(manual) {
   MAP.loading = true;
   if ($('mapReload')) $('mapReload').disabled = true;
   api('getLocationMap').then(function (d) {
-    MAP.loading = false; MAP.data = d; MAP.err = ''; S.online = true;
-    if (S.view === 'map') { renderMapGrid(); if (manual) toast('อัปเดตผังแล้ว'); }
+    // ช่องที่มีความเคลื่อนไหวใหม่ตั้งแต่โหลดครั้งก่อน → กระพริบให้เห็น
+    var old = MAP.data && MAP.data.map, fresh = {};
+    if (old) Object.keys(d.map || {}).forEach(function (code) {
+      var a = old[code], b = d.map[code];
+      if (b && b.last && (!a || a.last !== b.last || a.n !== b.n)) fresh[code] = 1;
+    });
+    MAP.fresh = fresh;
+    MAP.loading = false; MAP.data = d; MAP.err = ''; S.online = true; MAP.loadedAt = Date.now();
+    if (S.view === 'map') {
+      renderMapGrid(); MAP.fresh = {};
+      var nf = Object.keys(fresh).length;
+      if (manual) toast('อัปเดตผังแล้ว'); else if (nf) toast('มีความเคลื่อนไหวใหม่ ' + nf + ' ช่อง', 2000);
+    }
+    mapAgeTick();
   }, function (err) {
     MAP.loading = false; MAP.err = err.message;
     if (err.network) S.online = false;
     if (S.view === 'map') renderMapGrid();
   });
 }
+
+// อัปเดตอัตโนมัติ: ทุก 30 วินาที เฉพาะตอนอยู่หน้าผัง + หน้าจอไม่ได้ซ่อน + ไม่ได้เล่นย้อนหลัง
+function mapLiveDue() {
+  return MAP.live && S.view === 'map' && document.visibilityState !== 'hidden' && !RP.open && !MAP.loading &&
+    $('modal').classList.contains('hidden') && Date.now() - MAP.loadedAt >= MAP_LIVE_MS;
+}
+function mapAgeTick() {
+  var el = $('mapAge'); if (!el) return;
+  if (!MAP.loadedAt) { el.textContent = ''; return; }
+  var sec = Math.round((Date.now() - MAP.loadedAt) / 1000);
+  el.textContent = 'อัปเดต ' + (sec < 5 ? 'เมื่อสักครู่' : sec < 60 ? sec + ' วิ.ที่แล้ว' : Math.floor(sec / 60) + ' นาทีที่แล้ว') +
+    (MAP.live && RP.open ? ' · หยุดระหว่างเล่นย้อนหลัง' : '');
+}
+setInterval(function () {
+  if (S.view !== 'map') return;
+  mapAgeTick();
+  if (mapLiveDue()) loadMap();
+}, 5000);
+// กลับมาเปิดหน้าจอ (ปลดล็อกมือถือ / สลับแท็บกลับมา) → โหลดทันทีถ้าข้อมูลเก่าเกิน 30 วินาที
+document.addEventListener('visibilitychange', function () { if (mapLiveDue()) loadMap(); });
 
 // รายการในเครื่องที่ยังไม่ได้ส่งขึ้นเซิร์ฟเวอร์ → นับรวมในผังด้วย
 function mapPendingByLoc() {
@@ -1901,6 +1943,7 @@ function renderMapGrid() {
         if (code === S.location) cls += ' cur';
         if (i.last && bkkMs(i.last) >= hotSince) cls += ' hot';
         if (code === latestLoc) cls += ' latest';
+        if (MAP.fresh[code]) cls += ' fresh';
         return '<td><button class="cell ' + cls + '" data-cell="' + code + '" title="' + code + (i.last ? ' · ล่าสุด ' + esc(i.last) : '') + '">' + (show > 1 ? show : '') + '</button></td>';
       }).join('') + '</tr>';
     }).join('');
@@ -1910,9 +1953,13 @@ function renderMapGrid() {
   }).join('');
   }
   out.classList.toggle('pair', shown.length > 1);
+  // เก็บตำแหน่งเลื่อนแนวนอนของแต่ละแถว (มือถือ) ไว้ เพื่อไม่ให้เด้งกลับตอนอัปเดตอัตโนมัติ
+  var keepScroll = {};
+  Array.prototype.forEach.call(out.querySelectorAll('.rack-scroll'), function (el, i) { if (el.scrollLeft) keepScroll[i] = el.scrollLeft; });
   out.innerHTML = (shown.length > 1 ? shown.map(function (z) {
     return '<div class="zone-col"><div class="zone-head">โซน ' + esc(z) + '</div>' + zoneHtml(z) + '</div>';
   }).join('') : zoneHtml(MAP.zone)) + '<p class="muted small center">ตัวเลขในช่อง = จำนวนกล่อง (ถ้ามากกว่า 1) · แตะช่องเพื่อดูของในช่องนั้น</p>';
+  Array.prototype.forEach.call(out.querySelectorAll('.rack-scroll'), function (el, i) { if (keepScroll[i]) el.scrollLeft = keepScroll[i]; });
   Array.prototype.forEach.call(out.querySelectorAll('[data-cell]'), function (b) {
     b.onclick = function () { openMapCell(b.getAttribute('data-cell')); };
   });
