@@ -1,12 +1,12 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261116-1849'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261116-1852'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
 var S = {
-  view: 'scan',
+  view: ['scan', 'manual', 'map', 'kd', 'history'].indexOf(store('pda_view')) >= 0 ? store('pda_view') : 'scan', // เปิดแอป / รีเฟรช → อยู่หน้าเดิม
   user: validName(store('pda_user')) ? store('pda_user') : '', // ชื่อ "0" ฯลฯ ที่ตั้งไว้กันแอบอ้าง = ถือว่ายังไม่มีชื่อ
   device: store('pda_device') || '',
   location: store('pda_loc') || '',
@@ -120,6 +120,7 @@ function setMsg(type, text, camFor) { S.msg = { type: type, text: text, at: Date
 
 // ======================= Layout =======================
 function render() {
+  store('pda_view', S.view);
   var pending = S.recent.filter(function (r) { return r.status === 'pending'; }).length;
   $('app').innerHTML =
     '<header class="top">' +
@@ -1815,7 +1816,7 @@ function saveManual() {
 
 // ======================= ผัง Location =======================
 // แสดงทุก Location ตามแถวชั้นวาง (โซน → แถว → ช่อง 01–16 × ชั้น A/B) ว่าช่องไหนสแกนของเข้าไปแล้ว
-var MAP = { data: null, loading: false, zone: '', mode: 'all', err: '', more: false, trail: store('pda_map_trail') !== '0' };
+var MAP = { data: null, loading: false, zone: store('pda_map_zone') || '', mode: 'all', err: '', more: false, trail: store('pda_map_trail') !== '0' };
 MAP.items = storeJson('pda_map_items') || []; MAP.itemsSig = MAP.items.length ? (store('pda_map_sig') || '') : '';
 MAP.q = ''; MAP.findAll = false;
 var TRAIL_N = 10;
@@ -1862,7 +1863,8 @@ if (MAP_WIDE_MQ) {
 
 function renderMap() {
   var zones = Object.keys(mapLayout()).sort(); // เรียงโซนตามตัวอักษร (CA … CJ, CO, CP, CQ)
-  if (!MAP.zone) MAP.zone = (S.location && zones.indexOf(S.location.split('-')[0]) >= 0) ? S.location.split('-')[0] : zones[0];
+  if (!MAP.zone || zones.indexOf(MAP.zone) < 0) MAP.zone = (S.location && zones.indexOf(S.location.split('-')[0]) >= 0) ? S.location.split('-')[0] : zones[0];
+  store('pda_map_zone', MAP.zone);
   var KDV = S.view === 'kd';
   $('main').innerHTML =
     '<section class="map-top">' +
