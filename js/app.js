@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261116-1642'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261116-1652'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -1309,7 +1309,8 @@ function openLocationPicker(opts) {
 // ลำดับตัวอ่าน: 1) ตัวอ่านในเบราว์เซอร์ (Android Chrome / iPhone ที่เปิด Shape Detection API) → 2) zxing (WebAssembly) → 3) jsQR
 // อ่านภาพต่อเนื่องทุกเฟรม · ขอภาพ 1920×1080 · อ่านเฉพาะกรอบกลางจอแบบเต็มความละเอียด · ซูม/โฟกัส/ไฟฉาย ถ้าเครื่องรองรับ
 var ZXING_URL = 'https://cdn.jsdelivr.net/npm/barcode-detector@2.2.2/dist/es/pure.min.js';
-var JSQR_URL = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js';
+var JSQR_URL = 'js/vendor/jsqr.js?v=2'; // jsQR ในเครื่อง (เปิดส่วนภายในให้ตัวกู้ QR ใช้)
+var PARTIALQR_URL = 'js/partialqr.js?v=1';
 var SCAN_FORMATS = ['qr_code', 'code_128', 'code_39', 'ean_13', 'data_matrix'];
 var CROP_RATIO = 0.7; // ขนาดกรอบกลางจอ (สัดส่วนของด้านสั้น)
 var IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -1343,14 +1344,32 @@ function makeJsqrEngine() {
   });
 }
 
+// ตัวกู้ QR มุมขาด (ป้ายพิมพ์ตกขอบ): หาสี่เหลี่ยมมุมที่เหลือ 2 มุม → คำนวณมุมที่หาย → ให้ Error Correction ของ QR กู้ข้อมูล
+// ใช้ CPU มากกว่า → ทำงานไม่เกินทุก 250 ms และย่อภาพไม่เกิน 600 px
+function makePartialEngine() {
+  return loadScriptOnce(JSQR_URL).then(function () { return loadScriptOnce(PARTIALQR_URL); }).then(function () {
+    if (!window.jsQR || !window.jsQR._i || !window.decodePartialQR) throw new Error('no partial');
+    var last = 0, cv = document.createElement('canvas');
+    return { name: 'partial', label: 'กู้ QR', src: 'crop', detect: function (src) {
+      var now = Date.now(); if (now - last < 250) return Promise.resolve(null); last = now;
+      var k = Math.min(1, 600 / Math.max(src.width, src.height)), w = Math.round(src.width * k), h = Math.round(src.height * k);
+      cv.width = w; cv.height = h;
+      var g = cv.getContext('2d', { willReadFrequently: true }); g.drawImage(src, 0, 0, w, h);
+      var r = window.decodePartialQR(window.jsQR, g.getImageData(0, 0, w, h).data, w, h);
+      return Promise.resolve(r && r.data ? r.data : null);
+    } };
+  });
+}
+
 // Android ที่มีตัวอ่านในเบราว์เซอร์ → ใช้ตัวนั้นตัวเดียว
 // iPhone / อื่นๆ → zxing (สำรอง jsQR) และถ้ามีตัวอ่าน Apple ให้สลับใช้คู่กันทุกเฟรม (ตัวทดลองอาจอ่านไม่ได้)
 function getDetectors() {
   if (getDetectors.p) return getDetectors.p;
   getDetectors.p = makeNativeEngine().catch(function () { return null; }).then(function (nat) {
-    if (nat && !IS_IOS) return [nat];
-    return makeZxingEngine().catch(function () { return makeJsqrEngine(); }).catch(function () { return null; }).then(function (z) {
-      var list = [nat, z].filter(Boolean);
+    var part = makePartialEngine().catch(function () { return null; });
+    if (nat && !IS_IOS) return part.then(function (p) { return [nat, p].filter(Boolean); });
+    return Promise.all([makeZxingEngine().catch(function () { return makeJsqrEngine(); }).catch(function () { return null; }), part]).then(function (zz) {
+      var z = zz[0], list = [nat, z, zz[1]].filter(Boolean);
       if (!list.length) throw new Error('โหลดตัวอ่าน QR ไม่ได้ (ต้องต่ออินเทอร์เน็ต)');
       return list;
     });
