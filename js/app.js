@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261116-1832'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261116-1849'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -1908,7 +1908,7 @@ function renderMap() {
     toast(MAP.live ? 'เปิดอัปเดตอัตโนมัติ (ทุก 30 วินาที)' : 'ปิดอัปเดตอัตโนมัติ');
   };
   if ($('mapTrail')) $('mapTrail').onclick = function () { MAP.trail = !MAP.trail; store('pda_map_trail', MAP.trail ? '1' : '0'); renderMap(); };
-  if (KDV) { bindKdTop(); if (Date.now() - KD.loadedAt > KD_TTL) loadKd(); loadCount(); }
+  if (KDV) { bindKdTop(); kdCheck(); loadCount(); }
   bindMapSearch();
   renderRpPanel();
   if (MAP.data) renderMapGrid();
@@ -1958,7 +1958,7 @@ function mapAgeTick() {
 setInterval(function () {
   if (!isMapView()) return;
   mapAgeTick();
-  if (mapLiveDue()) { loadMap(); if (S.view === 'kd') { loadCount(); if (Date.now() - KD.loadedAt > KD_TTL) loadKd(); } }
+  if (mapLiveDue()) { loadMap(); if (S.view === 'kd') loadCount(); }
 }, 5000);
 // กลับมาเปิดหน้าจอ (ปลดล็อกมือถือ / สลับแท็บกลับมา) → โหลดทันทีถ้าข้อมูลเก่าเกิน 30 วินาที
 document.addEventListener('visibilitychange', function () { if (mapLiveDue()) loadMap(); });
@@ -3067,8 +3067,29 @@ var KD_TTL = 10 * 60000;
 var KD = {
   rows: storeJson('pda_kd_rows') || [], snapshotAt: store('pda_kd_snap') || '', loadedAt: 0, loading: false, err: '',
   mode: store('pda_kd_mode') === 'part' ? 'part' : 'lot', filter: 'diff', all: false,
-  count: storeJson('pda_kd_count') || { round: null, marks: {} }
+  count: storeJson('pda_kd_count') || { round: null, marks: {} },
+  lastMod: store('pda_kd_lm') || '', checkedAt: 0, checking: false
 };
+// ทุก 1 นาที ถามแค่ "ไฟล์ต้นทางแก้ไขล่าสุดเมื่อไร" (HEAD ~0.5 KB) → เปลี่ยนแล้วค่อยโหลดไฟล์จริง
+// เช็คเฉพาะตอนเปิดแท็บ Kingdee หรือหน้าสแกน (มี Location) และหน้าจอไม่ได้ซ่อน
+var KD_CHECK_MS = 60000;
+function kdCheckWanted() {
+  return document.visibilityState !== 'hidden' && (S.view === 'kd' || (S.view === 'scan' && !!S.location));
+}
+function kdCheck() {
+  if (KD.checking || KD.loading) return;
+  if (!KD.rows.length || !KD.lastMod) { KD.checkedAt = Date.now(); loadKd(true); return; }
+  KD.checking = true;
+  fetch(KD_URL + '?h=' + Date.now(), { method: 'HEAD', cache: 'no-store' }).then(function (r) {
+    KD.checking = false; KD.checkedAt = Date.now();
+    var lm = r.ok && r.headers.get('Last-Modified');
+    // ใหม่กว่าเดิมเกิน 5 วินาทีจริงๆ ถึงโหลด (เซิร์ฟเวอร์ GitHub แต่ละตัวอาจบอกเวลาต่างกัน 1–2 วินาที)
+    var tNew = Date.parse(lm || ''), tOld = Date.parse(KD.lastMod || '');
+    if (tNew && (!tOld || tNew - tOld > 5000)) loadKd(true); else renderKdSnap();
+  }, function () { KD.checking = false; KD.checkedAt = Date.now(); });
+}
+setInterval(function () { if (kdCheckWanted() && Date.now() - KD.checkedAt >= KD_CHECK_MS - 1000) kdCheck(); }, 15000);
+document.addEventListener('visibilitychange', function () { if (kdCheckWanted() && Date.now() - KD.checkedAt >= KD_CHECK_MS) kdCheck(); });
 var KD_ST = {
   todo: ['⚪', 'ยังไม่นับ', 'ระบบมีของ ยังไม่ได้นับในรอบนี้'],
   match: ['🟢', 'ตรง', 'รหัส / Lot / จำนวน ตรงกับ Kingdee'],
@@ -3082,6 +3103,7 @@ function loadKd(force) {
   KD.loading = true; KD.err = ''; renderKdSnap();
   fetch(KD_URL + (force ? '?t=' + Date.now() : ''), { cache: force ? 'no-store' : 'default' }).then(function (r) {
     if (!r.ok) throw new Error('HTTP ' + r.status);
+    var lm = r.headers.get('Last-Modified'); if (lm) { KD.lastMod = lm; store('pda_kd_lm', lm); }
     return r.text();
   }).then(function (t) {
     var d = JSON.parse(t.slice(t.indexOf('{'), t.lastIndexOf('}') + 1)), set = {};
@@ -3192,7 +3214,7 @@ function renderKdSnap() {
   var el = $('kdSnap'); if (!el) return;
   el.innerHTML = KD.loading ? '⏳ กำลังดึงยอด Kingdee…'
     : KD.err ? '<span class="err-text">' + esc(KD.err) + '</span>' + (KD.rows.length ? ' (ใช้ข้อมูลล่าสุดที่มี)' : '')
-    : KD.snapshotAt ? 'ยอด Kingdee ณ <b>' + esc(fmtWhen(kdSnapText())) + '</b> · ' + KD.rows.length.toLocaleString() + ' แถว' : '';
+    : KD.snapshotAt ? 'ยอด Kingdee ณ <b>' + esc(fmtWhen(kdSnapText())) + '</b> · ' + KD.rows.length.toLocaleString() + ' แถว · เช็คอัปเดตทุก 1 นาที' : '';
 }
 function renderKdRound() {
   var el = $('kdRound'); if (!el) return;
@@ -3312,7 +3334,7 @@ function openKdCell(code) {
 function renderKdLoc() {
   var el = $('kdLoc'); if (!el) return;
   if (!S.location) { el.innerHTML = ''; return; }
-  if (!KD.loadedAt && !KD.loading && !renderKdLoc.tried) { renderKdLoc.tried = 1; loadKd(); }
+  if (!KD.checkedAt && !KD.loading) kdCheck();
   if (!KD.rows.length) { el.innerHTML = ''; return; }
   var b = kdCompute().bins[S.location], open = store('pda_kd_scan') !== '0';
   if (!b || !b.nk) { el.innerHTML = '<div class="kd-loc muted small">Kingdee: ไม่มีของในช่องนี้</div>'; return; }
