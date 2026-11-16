@@ -17,7 +17,8 @@ const MAX_BATCH = 50;
 
 // ======================= Web App =======================
 const API_ACTIONS = { ping: ping, saveScans: saveScans, listScans: listScans, deleteScan: deleteScan, updateQty: updateQty, updateLocation: updateLocation, findByQr: findByQr, getScans: getScans, getTimeline: getTimeline, getPartPackages: getPartPackages, getLocationMap: getLocationMap, getLocationEvents: getLocationEvents,
-  uploadPhoto: uploadPhoto, getPhoto: getPhoto, deletePhoto: deletePhoto };
+  uploadPhoto: uploadPhoto, getPhoto: getPhoto, deletePhoto: deletePhoto,
+  getCountState: getCountState, setCountRound: setCountRound, markBinCounted: markBinCounted };
 
 function doPost(e) {
   let out;
@@ -705,4 +706,57 @@ function getPartPackages(partCode) {
     locs[r.location] = 1;
   });
   return { part_code: part, rows: rows, totals: totals, locationCount: Object.keys(locs).length };
+}
+
+
+// ======================= ตรวจนับเทียบ Kingdee =======================
+// รอบนับ (เวลาเริ่ม) เก็บใน Script Properties · เครื่องหมาย "นับช่องนี้เสร็จ" เก็บในชีต CountMarks
+// ยอด Kingdee หน้าเว็บดึงเองจาก OnHand-Inventory-Planner (อัปเดตทุก 10 นาที) — ฝั่งนี้ไม่ต้องใช้สิทธิ์ดึง URL ภายนอก
+const MARK_SHEET = 'CountMarks';
+const MARK_HEADERS = ['at', 'location', 'done', 'by'];
+
+function markSheet_() {
+  const ss = book_();
+  let sh = ss.getSheetByName(MARK_SHEET);
+  if (!sh) sh = ss.insertSheet(MARK_SHEET);
+  if (sh.getLastRow() === 0) {
+    sh.getRange(1, 1, 1, MARK_HEADERS.length).setValues([MARK_HEADERS]);
+    sh.setFrozenRows(1);
+    sh.getRange(1, 2, sh.getMaxRows(), 1).setNumberFormat('@');
+    sh.getRange(1, 4, sh.getMaxRows(), 1).setNumberFormat('@');
+  }
+  return sh;
+}
+function countRound_() {
+  try { return JSON.parse(PropertiesService.getScriptProperties().getProperty('COUNT_ROUND') || 'null'); } catch (e) { return null; }
+}
+/** รอบนับปัจจุบัน + ช่องที่กด "นับเสร็จ" ในรอบนี้ { loc: [at, by] } */
+function getCountState() {
+  const round = countRound_(), marks = {};
+  const sh = book_().getSheetByName(MARK_SHEET);
+  if (sh && sh.getLastRow() > 1) {
+    sh.getRange(2, 1, sh.getLastRow() - 1, MARK_HEADERS.length).getValues().forEach(function (r) {
+      const at = fmt_(r[0]), loc = String(r[1] || '');
+      if (!loc || (round && round.start && at < round.start)) return;
+      if (String(r[2]) === '1' || r[2] === true || r[2] === 1) marks[loc] = [at, String(r[3] || '')]; else delete marks[loc];
+    });
+  }
+  return { round: round, marks: marks, now: fmt_(new Date()) };
+}
+/** เริ่มรอบนับใหม่: start = 'yyyy-MM-dd HH:mm' (ว่าง = ตอนนี้) */
+function setCountRound(opt, by) {
+  opt = opt || {};
+  const start = clean_(opt.start, 16) || fmt_(new Date()).slice(0, 16);
+  if (!/^\d{4}-\d\d-\d\d \d\d:\d\d$/.test(start)) throw new Error('รูปแบบเวลาไม่ถูกต้อง');
+  const round = { start: start + ':00', name: clean_(opt.name, 60), by: clean_(by, 60), at: fmt_(new Date()) };
+  PropertiesService.getScriptProperties().setProperty('COUNT_ROUND', JSON.stringify(round));
+  return getCountState();
+}
+/** กด / ยกเลิก "นับช่องนี้เสร็จ" */
+function markBinCounted(loc, done, by) {
+  loc = clean_(loc, 30);
+  if (!/^[A-Z]{2}-\d{2}-\d{2}[A-Z]$/.test(loc)) throw new Error('Location ไม่ถูกต้อง');
+  const sh = markSheet_();
+  sh.getRange(sh.getLastRow() + 1, 1, 1, MARK_HEADERS.length).setValues([[fmt_(new Date()), loc, done ? 1 : 0, clean_(by, 60)]]);
+  return getCountState();
 }
