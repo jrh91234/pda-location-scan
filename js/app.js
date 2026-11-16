@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261116-1814'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261116-1815'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -3266,7 +3266,7 @@ function renderKdList(x) {
 // ตารางเทียบในช่อง
 function kdTableHtml(b, compact) {
   if (!b || !b.keys.length) return '<div class="muted small center pad">ทั้ง Kingdee และในแอปไม่มีของในช่องนี้</div>';
-  return '<table class="kd-table"><thead><tr><th>รหัส' + (KD.mode === 'lot' ? ' · Lot' : '') + '</th><th>Kingdee</th><th>นับได้</th>' + (compact ? '' : '<th>ต่าง</th>') + '</tr></thead><tbody>' +
+  return '<table class="kd-table"><thead><tr><th>รหัส' + (KD.mode === 'lot' ? ' · Lot' : '') + '</th><th class="num">Kingdee</th><th class="num">นับได้</th>' + (compact ? '' : '<th class="num">ต่าง</th>') + '</tr></thead><tbody>' +
     b.keys.map(function (y) {
       var info = bomInfo(y.part) || {}, name = (y.k && y.k.name) || info.name || '';
       var diff = y.k && y.a && !y.a.noQty && !y.unitBad ? y.a.q - y.k.q : null;
