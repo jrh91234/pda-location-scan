@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261117-0944'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261117-1003'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -45,7 +45,7 @@ function shiftOf(at) { // 'yyyy-MM-dd HH:mm:ss' → { date, shift }
   return { date: workDay(new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), h)), shift: h >= WD_DAY_START && h < WD_NIGHT_START ? 'day' : 'night' };
 }
 // ---------- BOM: รหัสสินค้า → ชื่อ / Specification (js/bom.js) ----------
-function bomInfo(code) { var b = window.BOM && code ? window.BOM[String(code).trim()] : null; return b ? { name: b[0], spec: b[1] } : null; }
+function bomInfo(code) { var b = window.BOM && code ? window.BOM[String(code).trim()] : null; return b ? { name: b[0], spec: b[1], org: (window.BOM_ORG || [])[b[2]] || '', wh: (window.BOM_WH || [])[b[3]] || '' } : null; }
 function bomLine(code) {
   var b = bomInfo(code); if (!b || !(b.name || b.spec)) return '';
   return '<div class="bom-line">' + (b.name ? '<span class="bom-name">' + esc(b.name) + '</span>' : '') + (b.spec ? '<span class="bom-spec">' + esc(b.spec) + '</span>' : '') + '</div>';
@@ -1008,7 +1008,7 @@ function readHistFilter() {
 // ดึงทุกรายการตามตัวกรอง (ไม่จำกัด 300 แถวเหมือนหน้าจอ) แล้วสร้างไฟล์ .xlsx ในเบราว์เซอร์ด้วย SheetJS
 var XLSX_URL = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
 var XLSX_COLS = [
-  ['scanned_at', 'วันเวลาสแกน', 19], ['work_date', 'วันทำงาน', 11], ['shift', 'กะ', 6], ['location', 'Location', 12], ['part_code', 'รหัสสินค้า', 16], ['bom_name', 'Child Item Name', 32], ['bom_spec', 'Specification', 16], ['lot_no', 'Lot', 13],
+  ['scanned_at', 'วันเวลาสแกน', 19], ['work_date', 'วันทำงาน', 11], ['shift', 'กะ', 6], ['location', 'Location', 12], ['part_code', 'รหัสสินค้า', 16], ['bom_name', 'Child Item Name', 32], ['bom_spec', 'Specification', 16], ['bom_org', 'Issuing Organization', 40], ['bom_wh', 'Default Issuing Warehouse', 40], ['lot_no', 'Lot', 13],
   ['qty', 'จำนวน', 9], ['unit', 'หน่วย', 7], ['pkg_ref', 'Package', 10], ['scanned_by', 'ผู้สแกน', 14], ['device', 'เครื่อง', 10],
   ['status', 'สถานะ', 9], ['photos', 'จำนวนรูป', 8], ['location_original', 'Location เดิม', 12], ['qty_original', 'ยอดเดิม', 9],
   ['edited_by', 'แก้ไขล่าสุดโดย', 14], ['edited_at', 'แก้ไขล่าสุดเมื่อ', 19], ['edit_note', 'เหตุผลแก้ไข', 20], ['note', 'หมายเหตุ', 24],
@@ -1037,7 +1037,7 @@ function exportExcel() {
         if (k === 'status') v = r.status === 'deleted' ? 'ลบแล้ว' : 'ใช้งาน';
         if (k === 'photos') v = (r.photos || []).length;
         if (k === 'work_date') v = shiftOf(r.scanned_at).date;
-        if (k === 'bom_name' || k === 'bom_spec') { var bi = bomInfo(r.part_code); v = bi ? (k === 'bom_name' ? bi.name : bi.spec) : ''; }
+        if (k.indexOf('bom_') === 0) { var bi = bomInfo(r.part_code) || {}; v = bi[k.slice(4)] || ''; }
         if (k === 'shift') v = SHIFT_TEXT[shiftOf(r.scanned_at).shift] || '';
         if (k === 'location_original' && v === r.location) v = '';
         o[c[1]] = v === undefined || v === null ? '' : v;
@@ -1061,11 +1061,11 @@ function exportExcel() {
     var srows = Object.keys(sum).sort().map(function (k) {
       var s = sum[k];
       var bi = bomInfo(s.part) || {};
-      return { 'รหัสสินค้า': s.part, 'Child Item Name': bi.name || '', 'Specification': bi.spec || '', 'จำนวนกล่อง': s.n, 'ยอดรวม': Math.round(s.qty * 1000) / 1000, 'หน่วย': s.unit,
+      return { 'รหัสสินค้า': s.part, 'Child Item Name': bi.name || '', 'Specification': bi.spec || '', 'Issuing Organization': bi.org || '', 'Default Issuing Warehouse': bi.wh || '', 'จำนวนกล่อง': s.n, 'ยอดรวม': Math.round(s.qty * 1000) / 1000, 'หน่วย': s.unit,
                'จำนวน Location': Object.keys(s.locs).length, 'Location': Object.keys(s.locs).sort().join(', ') };
     });
     var ws2 = XLSX.utils.json_to_sheet(srows.length ? srows : [{ 'รหัสสินค้า': '(ไม่มีรายการที่ใช้งาน)' }]);
-    ws2['!cols'] = [{ wch: 16 }, { wch: 32 }, { wch: 16 }, { wch: 11 }, { wch: 10 }, { wch: 7 }, { wch: 14 }, { wch: 60 }];
+    ws2['!cols'] = [{ wch: 16 }, { wch: 32 }, { wch: 16 }, { wch: 40 }, { wch: 40 }, { wch: 11 }, { wch: 10 }, { wch: 7 }, { wch: 14 }, { wch: 60 }];
     XLSX.utils.book_append_sheet(wb, ws2, 'สรุปตามพาร์ท');
 
     var now = new Date();
