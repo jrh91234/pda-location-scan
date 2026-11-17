@@ -574,3 +574,6 @@ main.view-kd > .map-top, .map-top.tall { position: static; }
 .kdm-minrow .field { width: 70px; margin: 0; padding: 4px 6px; min-height: 0; }
 .kdm-dtable td, .kdm-dtable th { white-space: nowrap; }
 .kdm-total td { font-weight: 700; background: #f2f4f7; }
+.pkg-box .pkg-list { margin: 6px 0; display: flex; flex-direction: column; gap: 4px; }
+.pkg-actions { flex-wrap: wrap; }
+.pkg-actions .btn { flex: 1 1 100%; }

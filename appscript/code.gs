@@ -16,7 +16,7 @@ const TZ = 'Asia/Bangkok';
 const MAX_BATCH = 50;
 
 // ======================= Web App =======================
-const API_ACTIONS = { ping: ping, saveScans: saveScans, listScans: listScans, deleteScan: deleteScan, updateQty: updateQty, updateLocation: updateLocation, findByQr: findByQr, getScans: getScans, getTimeline: getTimeline, getPartPackages: getPartPackages, getLocationMap: getLocationMap, getLocationEvents: getLocationEvents,
+const API_ACTIONS = { ping: ping, saveScans: saveScans, listScans: listScans, deleteScan: deleteScan, updateQty: updateQty, updateLocation: updateLocation, findByQr: findByQr, findSamePkg: findSamePkg, getScans: getScans, getTimeline: getTimeline, getPartPackages: getPartPackages, getLocationMap: getLocationMap, getLocationEvents: getLocationEvents,
   uploadPhoto: uploadPhoto, getPhoto: getPhoto, deletePhoto: deletePhoto,
   getCountState: getCountState, setCountRound: setCountRound, markBinCounted: markBinCounted, getKingdeeMoves: getKingdeeMoves,
   getCountProfile: getCountProfile, saveCountProfile: saveCountProfile, saveCountSample: saveCountSample };
@@ -364,6 +364,21 @@ function findByQr(qr) {
     if (String(rows[i].qr_raw) === chk.text && String(rows[i].status) !== 'deleted') return toClient_(rows[i]);
   }
   return null;
+}
+
+/** เลข Package เทียบกัน: ตัด 0 นำหน้า ('0001' = '00001' = '1') */
+function pkgKey_(v) { const t = String(v == null ? '' : v).trim().toUpperCase(); return t.replace(/^0+(?=\w)/, ''); }
+/**
+ * รายการที่ใช้งานอยู่ ซึ่งเป็น รหัส + Lot + Package เดียวกัน แต่ QR ต่างกัน (เช่น ป้ายพิมพ์ใหม่หลังแบ่งกล่อง หรือสแกนกล่องเดิมซ้ำด้วยป้ายใหม่)
+ * คืน [] ถ้าไม่มี Package หรือไม่เจอ
+ */
+function findSamePkg(part, lot, pkg, qr) {
+  part = clean_(part, 80).toUpperCase(); lot = clean_(lot, 80); const pk = pkgKey_(clean_(pkg, 80)); qr = clean_(qr, 500);
+  if (!part || !pk) return [];
+  return readAll_(sheet_()).filter(function (r) {
+    return String(r.status) !== 'deleted' && String(r.part_code).toUpperCase() === part && String(r.lot_no) === lot &&
+      pkgKey_(r.pkg_ref) === pk && String(r.qr_raw) !== qr;
+  }).slice(-10).map(toClient_);
 }
 
 /** ดึงสถานะล่าสุดของหลายรายการ (ให้หน้าสแกนในเครื่องตรงกับชีต: ลบ/ย้าย/แก้ยอดจากเครื่องอื่น) */
