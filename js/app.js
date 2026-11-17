@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261116-2245'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261117-0856'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -3159,6 +3159,7 @@ function loadKd(force) {
                  String(r.partName || r.materialName || ''), String(r.specification || ''), String(r.warehouse || '')]);
     });
     KD.rows = rows; KD.snapshotAt = d.snapshotAt || ''; KD.loadedAt = Date.now(); KD.loading = false; kdCompute.key = null;
+    if (KDF.q) kdfRun(KDF.q, false);
     storeJson('pda_kd_rows', rows); store('pda_kd_snap', KD.snapshotAt);
     kdRefreshViews();
   }).catch(function (err) {
@@ -3243,6 +3244,9 @@ function kdTopHtml() {
       '<button class="btn small' + (KDM.trail ? ' active' : '') + '" id="kdTrail" title="ลูกศร 10 ความเคลื่อนไหว Kingdee ล่าสุด">➜ ความเคลื่อนไหว</button>' +
     '</div>' +
     '<div id="kdRound" class="kd-round"></div>' +
+    '<div class="kdf-bar"><input id="kdfQ" class="field" autocomplete="off" autocapitalize="characters" spellcheck="false" enterkeyhint="search" placeholder="สแกน / พิมพ์ รหัส หรือ Lot → ดูว่า Kingdee บอกอยู่ช่องไหน" value="' + esc(KDF.q) + '">' +
+      '<button class="btn primary" id="kdfCam" title="เปิดกล้องสแกนป้าย">📸 สแกน</button></div>' +
+    '<div id="kdFind"></div>' +
     '<div class="map-legend small">' + Object.keys(KD_ST).map(function (k) {
       return '<span title="' + esc(KD_ST[k][2]) + '"><i class="lg kd-' + k + '"></i>' + KD_ST[k][1] + '</span>';
     }).join('') + '<span><i class="lg kd-done-lg">✔</i>กดนับเสร็จแล้ว</span><span><i class="lg kd-moved-lg"></i>Kingdee เปลี่ยนรอบล่าสุด</span></div>' +
@@ -3252,7 +3256,7 @@ function bindKdTop() {
   Array.prototype.forEach.call(document.querySelectorAll('[data-kdmode]'), function (b) {
     b.onclick = function () { KD.mode = b.getAttribute('data-kdmode'); store('pda_kd_mode', KD.mode); kdCompute.key = null; renderMap(); };
   });
-  renderKdSnap(); renderKdRound(); renderKdMoves();
+  renderKdSnap(); renderKdRound(); renderKdMoves(); bindKdFind();
   $('kdTrail').onclick = function () { KDM.trail = !KDM.trail; store('pda_kdm_trail', KDM.trail ? '1' : '0'); this.classList.toggle('active', KDM.trail); rpPaint(); };
   if (Date.now() - KDM.loadedAt > 60000) loadKdMoves();
 }
@@ -3304,6 +3308,7 @@ function kdCellHtml(code, x) {
   var b = x.bins[code], cls = 'cell ' + (b ? 'kd-' + b.st : 'empty');
   if (b && b.marked) cls += ' kd-done';
   if (x.moved && x.moved[code]) cls += ' kd-moved';
+  if (KDF.hits && KDF.hits[code]) cls += KDF.hits[code] === 'lot' ? ' kdf-hit' : ' kdf-hit2';
   if (code === S.location) cls += ' cur';
   var txt = !b ? '' : b.st === 'todo' ? (b.nk > 1 ? b.nk : '') : b.st === 'diff' ? b.nd : b.st === 'extra' ? (b.na > 1 ? b.na : '') : '';
   return '<td><button class="' + cls + '" data-cell="' + code + '" title="' + code + (b ? ' · ' + KD_ST[b.st][1] + ' · Kingdee ' + b.nk + ' รายการ · นับได้ ' + b.na + ' รายการ' : '') + '">' + txt + '</button></td>';
@@ -3528,6 +3533,95 @@ function kdTrailActions() {
     if (out.length < TRAIL_N) out.push({ at: m[0], first: m[0], ev: ev, from: m[4], to: m[5], loc: loc, part: m[2], by: 'Kingdee', n: 1 });
   });
   return out;
+}
+
+// ===== หา "Kingdee บอกว่าอยู่ช่องไหน" จากการสแกนป้ายหน้างาน (กล้อง / ปืนสแกน / พิมพ์) =====
+// hits: { ช่อง: 'lot' (รหัส+Lot ตรง → กระพริบแดง) | 'part' (รหัสตรงแต่คนละ Lot → กรอบส้ม) }
+var KDF = { q: '', part: '', lot: '', hits: null, list: [], appLocs: [], all: false };
+function kdfRun(raw, jump) {
+  var chk = checkScan(raw), text = (chk.text || String(raw || '')).trim();
+  if (!text) { kdfClear(); return; }
+  var loc = asLocation(text);
+  if (loc) { KDF.q = ''; KDF.hits = null; KDF.list = []; renderKdFind(); if ($('kdfQ')) $('kdfQ').value = ''; mapGotoCell(loc); setTimeout(function () { openKdCell(loc); }, 400); return; }
+  var p = parseQr(text), part = '', lot = '';
+  if (p.format !== 'text' && p.part_code) { part = p.part_code.toUpperCase(); lot = p.lot_no; }
+  else {
+    // ข้อความเดียว: ลองเป็นรหัส → เป็น Lot
+    var u = text.toUpperCase();
+    if (KD.rows.some(function (r) { return r[1].toUpperCase() === u; })) part = u;
+    else if (KD.rows.some(function (r) { return r[2].toUpperCase() === u; })) lot = text;
+    else part = u;
+  }
+  KDF.q = text; KDF.part = part; KDF.lot = lot; KDF.all = false;
+  var hits = {}, by = {};
+  KD.rows.forEach(function (r) {
+    var pOk = !part || r[1].toUpperCase() === part, lOk = !lot || r[2].toUpperCase() === lot.toUpperCase();
+    var kind = pOk && lOk ? 'lot' : (part && pOk ? 'part' : '');
+    if (!kind) return;
+    if (hits[r[0]] !== 'lot') hits[r[0]] = kind;
+    var e = by[r[0]] || (by[r[0]] = { loc: r[0], kind: kind, q: 0, unit: r[4], lots: {}, parts: {}, part: r[1], name: r[5] });
+    if (kind === 'lot') e.kind = 'lot';
+    e.q += r[3]; e.lots[r[2] || '-'] = (e.lots[r[2] || '-'] || 0) + r[3]; e.parts[r[1]] = 1;
+  });
+  KDF.hits = hits;
+  KDF.list = Object.keys(by).map(function (k) { return by[k]; }).sort(function (a, b) { return (a.kind === 'lot' ? 0 : 1) - (b.kind === 'lot' ? 0 : 1) || (a.loc < b.loc ? -1 : 1); });
+  // แอปสแกนไว้ที่ไหน (ของชิ้นเดียวกัน) — เทียบกับที่ Kingdee บอก
+  var app = {};
+  mapAllItems().forEach(function (it) {
+    if (isTestUser(it.by)) return;
+    if ((!part || String(it.part).toUpperCase() === part) && (!lot || String(it.lot).toUpperCase() === lot.toUpperCase())) app[it.loc] = 1;
+  });
+  KDF.appLocs = Object.keys(app).sort();
+  if ($('kdfQ')) $('kdfQ').value = text;
+  renderKdFind();
+  if (MAP.data) renderMapGrid();
+  var first = KDF.list.filter(function (e) { return e.kind === 'lot'; })[0] || KDF.list[0];
+  if (jump !== false) {
+    if (first) { beep(true); mapGotoCell(first.loc); } else beep(false);
+  }
+}
+function kdfClear() {
+  KDF.q = ''; KDF.hits = null; KDF.list = []; KDF.appLocs = [];
+  if ($('kdfQ')) $('kdfQ').value = '';
+  renderKdFind(); if (MAP.data) renderMapGrid();
+}
+function renderKdFind() {
+  var el = $('kdFind'); if (!el) return;
+  if (!KDF.q) { el.innerHTML = ''; return; }
+  var lots = KDF.list.filter(function (e) { return e.kind === 'lot'; }), others = KDF.list.filter(function (e) { return e.kind !== 'lot'; });
+  var info = bomInfo(KDF.part) || {}, name = KDF.part ? (info.name || (KDF.list[0] && KDF.list[0].name) || '') : '';
+  var lim = mapWide() || KDF.all ? 999 : 5;
+  function row(e) {
+    var lotTxt = Object.keys(e.lots).map(function (l) { return (l === '-' ? 'ไม่มี Lot' : 'Lot ' + esc(l)) + ' ' + kdFmt(e.lots[l]); }).join(' · ');
+    var inApp = KDF.appLocs.indexOf(e.loc) >= 0;
+    return '<button type="button" class="find-item" data-kdfc="' + esc(e.loc) + '"><span class="kd-ico">' + (e.kind === 'lot' ? '📍' : '🔸') + '</span><span class="find-main">' +
+      '<span class="find-top"><span class="loc-pill">' + esc(e.loc) + '</span> <b>' + kdFmt(e.q) + '</b> <span class="small muted">' + esc(e.unit) + '</span>' +
+        (inApp ? ' <span class="kdm-ok">✓ แอปสแกนไว้ช่องนี้</span>' : '') + '</span>' +
+      '<span class="find-sub">' + (KDF.part ? '' : esc(Object.keys(e.parts).join(', ')) + ' · ') + lotTxt + '</span></span></button>';
+  }
+  var appOnly = KDF.appLocs.filter(function (l) { return !KDF.hits[l]; });
+  el.innerHTML = '<div class="find-box kdf-box">' +
+    '<div class="kdm-head"><span>' + [KDF.part ? '<b>' + esc(KDF.part) + '</b>' : '', KDF.lot ? 'Lot <b>' + esc(KDF.lot) + '</b>' : ''].filter(String).join(' · ') + (name ? ' <span class="small muted">' + esc(name) + '</span>' : '') + '</span>' +
+      '<button type="button" class="btn small" id="kdfX">✕ ล้าง</button></div>' +
+    (lots.length ? '<div class="small">📍 Kingdee บอกว่าอยู่ <b>' + lots.length + '</b> ช่อง (กระพริบแดงบนผัง)</div><div class="find-list">' + lots.slice(0, lim).map(row).join('') + '</div>' +
+        (lots.length > lim ? '<button type="button" class="btn small" id="kdfMore">ดูทั้งหมด ' + lots.length + ' ช่อง</button>' : '')
+      : '<div class="msg warn small">Kingdee ไม่มี' + (KDF.lot ? ' Lot นี้' : 'รหัสนี้') + 'ในช่องไหนเลย' + (others.length ? '' : ' (หรือยอดเป็น 0 / อยู่ Public area)') + '</div>') +
+    (others.length ? '<details class="kdm-apponly"' + (lots.length ? '' : ' open') + '><summary>🔸 รหัสเดียวกัน คนละ Lot (' + others.length + ' ช่อง · กรอบส้มบนผัง)</summary><div class="find-list">' + others.slice(0, 40).map(row).join('') + '</div></details>' : '') +
+    (appOnly.length ? '<div class="small kdf-app">📱 แอปสแกนไว้ที่ ' + appOnly.map(function (l) { return '<button type="button" class="loc-pill kdf-al" data-kdfc="' + esc(l) + '">' + esc(l) + '</button>'; }).join(' ') + ' <span class="muted">— แต่ Kingdee ไม่ได้บอกว่าอยู่ช่องนี้</span></div>' : '') +
+  '</div>';
+  $('kdfX').onclick = kdfClear;
+  if ($('kdfMore')) $('kdfMore').onclick = function () { KDF.all = true; renderKdFind(); };
+  Array.prototype.forEach.call(el.querySelectorAll('[data-kdfc]'), function (b) {
+    b.onclick = function () { var loc = b.getAttribute('data-kdfc'); mapGotoCell(loc); setTimeout(function () { openKdCell(loc); }, 450); };
+  });
+}
+function bindKdFind() {
+  var inp = $('kdfQ'); if (!inp) return;
+  inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); kdfRun(inp.value); inp.blur(); } });
+  // ปืนสแกน (DataWedge) บางเครื่องไม่ส่ง Enter → ข้อความที่ดูเป็นป้ายให้ค้นเลย
+  inp.addEventListener('change', function () { if (inp.value.trim() !== KDF.q) kdfRun(inp.value); });
+  $('kdfCam').onclick = function () { openCameraScanner(function (raw) { kdfRun(raw); }); };
+  renderKdFind();
 }
 
 (function init() {
