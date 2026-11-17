@@ -1,12 +1,12 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261117-1202'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261117-1853'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
 var S = {
-  view: ['scan', 'manual', 'map', 'kd', 'history'].indexOf(store('pda_view')) >= 0 ? store('pda_view') : 'scan', // เปิดแอป / รีเฟรช → อยู่หน้าเดิม
+  view: ['scan', 'manual', 'count', 'map', 'kd', 'history'].indexOf(store('pda_view')) >= 0 ? store('pda_view') : 'scan', // เปิดแอป / รีเฟรช → อยู่หน้าเดิม
   user: validName(store('pda_user')) ? store('pda_user') : '', // ชื่อ "0" ฯลฯ ที่ตั้งไว้กันแอบอ้าง = ถือว่ายังไม่มีชื่อ
   device: store('pda_device') || '',
   location: store('pda_loc') || '',
@@ -133,6 +133,7 @@ function render() {
     '<nav class="tabs">' +
       '<button data-view="scan" class="' + (S.view === 'scan' ? 'active' : '') + '">สแกน' + (pending ? ' <b class="badge">' + pending + '</b>' : '') + '</button>' +
       '<button data-view="manual" class="' + (S.view === 'manual' ? 'active' : '') + '">กรอกเอง</button>' +
+      '<button data-view="count" class="' + (S.view === 'count' ? 'active' : '') + '">นับรูป</button>' +
       '<button data-view="map" class="' + (S.view === 'map' ? 'active' : '') + '">ผัง</button>' +
       '<button data-view="kd" class="' + (S.view === 'kd' ? 'active' : '') + '">Kingdee</button>' +
       '<button data-view="history" class="' + (S.view === 'history' ? 'active' : '') + '">ประวัติ / ลบ</button>' +
@@ -141,9 +142,9 @@ function render() {
   $('btnUser').onclick = openUserModal;
   $('btnSettings').onclick = openSettings;
   Array.prototype.forEach.call(document.querySelectorAll('.tabs button'), function (b) {
-    b.onclick = function () { S.view = b.getAttribute('data-view'); render(); if (S.view !== 'history' && !isMapView()) syncRecent(); };
+    b.onclick = function () { S.view = b.getAttribute('data-view'); render(); if (S.view !== 'history' && S.view !== 'count' && !isMapView()) syncRecent(); };
   });
-  if (S.view === 'scan') renderScan(); else if (S.view === 'manual') renderManual(); else if (isMapView()) renderMap(); else renderHistory();
+  if (S.view === 'scan') renderScan(); else if (S.view === 'manual') renderManual(); else if (S.view === 'count') renderCount(); else if (isMapView()) renderMap(); else renderHistory();
 }
 
 function refreshHeader() {
@@ -3788,6 +3789,285 @@ function bindKdFind() {
   $('kdfCam').onclick = function () { openCameraScanner(function (raw) { kdfRun(raw); }); };
   renderKdFind();
 }
+
+// ======================= นับจากรูป (สอนเองที่หน้างาน) =======================
+// ถ่ายรูป → ลากกรอบตัวอย่าง 1–3 ชิ้น → แอปหาชิ้นที่เหมือนทั้งรูป (js/countworker.js) → แตะเพิ่ม/ลบจุด → ยืนยัน
+// ยืนยันแล้ว: จำแม่แบบไว้กับรหัสพาร์ท (ครั้งหน้าไม่ต้องลากกรอบ) + เก็บรูปและจุดไว้เทรนโมเดลภายหลัง
+var CNT = { part: store('pda_cnt_part') || '', prof: null, profState: '', src: null, gray: null, sent: false, boxes: [], cands: [], removed: {}, added: [],
+  thr: Number(store('pda_cnt_thr')) || 0.6, rot: store('pda_cnt_rot') !== '0', mode: 'box', zoom: 1, busy: false, err: '', res: null, undo: [], done: null };
+var CNT_PROFS = storeJson('pda_cnt_prof') || {};
+var CW = null, CW_SEQ = 0, CW_CB = {};
+function cntWorker() {
+  if (!CW) {
+    CW = new Worker('js/countworker.js?v=' + APP_VERSION);
+    CW.onmessage = function (e) { var cb = CW_CB[e.data.id]; delete CW_CB[e.data.id]; if (cb) cb(e.data); };
+    CW.onerror = function (e) { Object.keys(CW_CB).forEach(function (k) { CW_CB[k]({ error: e.message || 'ตัวนับผิดพลาด' }); delete CW_CB[k]; }); CW = null; CNT.sent = false; };
+  }
+  return CW;
+}
+function cntCall(msg) {
+  return new Promise(function (res, rej) {
+    var id = ++CW_SEQ; msg.id = id;
+    if (!CNT.sent && CNT.gray) { msg.gray = CNT.gray; CNT.sent = true; }
+    CW_CB[id] = function (d) { if (d.error) rej(new Error(d.error)); else res(d); };
+    cntWorker().postMessage(msg);
+  });
+}
+function b64FromU8(u) { var s = ''; for (var i = 0; i < u.length; i += 8192) s += String.fromCharCode.apply(null, u.subarray(i, i + 8192)); return btoa(s); }
+function u8FromB64(b) { var s = atob(b), u = new Uint8Array(s.length); for (var i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); return u; }
+function cntProfTpls(list) { return (list || []).map(function (t) { return { w: t.w, h: t.h, data: u8FromB64(t.b) }; }); }
+
+function renderCount() {
+  $('main').innerHTML =
+    '<section class="card-form cnt">' +
+      '<div class="sec-title"><span>📷 นับจากรูป</span><span class="small muted">ต้นแบบ · สอนเองที่หน้างาน</span></div>' +
+      '<label>รหัสพาร์ท <span class="muted small">(ใส่ไว้ แอปจะจำการสอนของพาร์ทนี้)</span></label>' +
+      '<div class="kdf-bar"><input id="cntPart" class="field" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="พิมพ์ / สแกนป้าย" value="' + esc(CNT.part) + '">' +
+        '<button class="btn" id="cntPartScan" title="สแกนป้าย">📸</button></div>' +
+      '<div id="cntProf" class="small cnt-prof"></div>' +
+      '<label class="btn primary cnt-shot">📷 ถ่ายรูป / เลือกรูป<input type="file" id="cntFile" accept="image/*" capture="environment" hidden></label>' +
+      '<div id="cntWork"></div>' +
+    '</section>' +
+    '<section class="cnt-help small muted" id="cntHelp">' +
+      '<b>วิธีใช้</b><ol><li>ใส่รหัสพาร์ท แล้วถ่ายรูปให้เห็นชิ้นงานชัด ไม่ทับกัน ถ่ายตรงๆ จากด้านบนหรือด้านปลาย</li>' +
+      '<li>กด <b>✏ ลากกรอบ</b> แล้วลากกรอบรอบชิ้นงาน 1–3 ชิ้น (ชิ้นที่ชัดที่สุด) → แอปนับให้</li>' +
+      '<li>กด <b>👆 แก้จุด</b>: แตะชิ้นที่แอปพลาดเพื่อเพิ่ม · แตะจุดที่ผิดเพื่อลบ (ซูม 🔍 ได้)</li>' +
+      '<li>กด <b>✔ ยืนยัน</b> — แอปจำการสอนไว้ ครั้งหน้าพาร์ทเดียวกันนับได้เลยไม่ต้องลากกรอบ</li></ol></section>';
+  var inp = $('cntPart'), timer = 0;
+  inp.addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(function () { cntSetPart(inp.value); }, 500); });
+  inp.addEventListener('change', function () { cntSetPart(inp.value); });
+  $('cntPartScan').onclick = function () {
+    openCameraScanner(function (raw) {
+      var p = parseQr(checkScan(raw).text || raw), code = (p.part_code || '').toUpperCase();
+      if (code) { inp.value = code; cntSetPart(code); beep(true); }
+    });
+  };
+  $('cntFile').onchange = function () { var f = this.files && this.files[0]; this.value = ''; if (f) cntLoadFile(f); };
+  cntSetPart(CNT.part, true);
+  renderCntWork();
+}
+function cntSetPart(v, quiet) {
+  v = String(v || '').trim().toUpperCase();
+  if (v === CNT.part && CNT.profState && !quiet) return;
+  CNT.part = v; store('pda_cnt_part', v);
+  CNT.prof = v && CNT_PROFS[v] ? CNT_PROFS[v] : null; CNT.profState = v ? (CNT.prof ? 'cached' : 'loading') : '';
+  renderCntProf();
+  if (!v || !apiUrl()) { if (v && !CNT.prof) CNT.profState = 'none'; renderCntProf(); return; }
+  api('getCountProfile', v).then(function (r) {
+    if (CNT.part !== v) return;
+    if (r && r.profile) { CNT.prof = r.profile; CNT.prof.uses = r.uses; CNT.prof.at = r.updated_at; CNT_PROFS[v] = CNT.prof; storeJson('pda_cnt_prof', CNT_PROFS); CNT.profState = 'ok'; }
+    else { CNT.profState = CNT.prof ? 'cached' : 'none'; }
+    renderCntProf();
+  }, function () { if (CNT.part === v) { CNT.profState = CNT.prof ? 'cached' : 'offline'; renderCntProf(); } });
+}
+function renderCntProf() {
+  var el = $('cntProf'); if (!el) return;
+  var b = bomInfo(CNT.part) || {}, p = CNT.prof;
+  el.innerHTML = !CNT.part ? '<span class="muted">ไม่ใส่รหัสก็นับได้ แต่แอปจะไม่จำการสอน</span>'
+    : (b.name ? '<b>' + esc(b.name) + '</b>' + (b.spec ? ' <span class="kd-spec">' + esc(b.spec) + '</span>' : '') + '<br>' : '') +
+      (p ? '🧠 <b>สอนแล้ว</b> · ตัวอย่าง ' + (p.tpl || []).length + ' · ตัวที่ไม่ใช่ ' + (p.neg || []).length + (p.uses ? ' · ใช้ ' + p.uses + ' ครั้ง' : '') + ' — ถ่ายรูปแล้วนับได้เลย'
+        : CNT.profState === 'loading' ? '⏳ กำลังดูว่าเคยสอนไหม…' : '🆕 ยังไม่เคยสอนพาร์ทนี้ — ถ่ายรูปแล้วลากกรอบตัวอย่าง');
+}
+function cntLoadFile(file) {
+  var url = URL.createObjectURL(file), img = new Image();
+  img.onload = function () {
+    var max = 1600, k = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+    var w = Math.round(img.naturalWidth * k), h = Math.round(img.naturalHeight * k);
+    var c = document.createElement('canvas'); c.width = w; c.height = h;
+    var ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(img, 0, 0, w, h);
+    URL.revokeObjectURL(url);
+    cntSetImage(c);
+  };
+  img.onerror = function () { URL.revokeObjectURL(url); toast('เปิดรูปไม่ได้'); };
+  img.src = url;
+}
+function cntSetImage(c) {
+  var w = c.width, h = c.height, d = c.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, w, h).data, g = new Uint8Array(w * h);
+  for (var i = 0, j = 0; i < g.length; i++, j += 4) g[i] = (d[j] * 77 + d[j + 1] * 150 + d[j + 2] * 29) >> 8;
+  CNT.src = c; CNT.gray = { w: w, h: h, data: g }; CNT.sent = false;
+  CNT.boxes = []; CNT.cands = []; CNT.removed = {}; CNT.added = []; CNT.undo = []; CNT.res = null; CNT.err = ''; CNT.done = null; CNT.zoom = 1;
+  CNT.mode = CNT.prof && (CNT.prof.tpl || []).length ? 'edit' : 'box';
+  renderCntWork();
+  if (CNT.mode === 'edit') cntRun();
+}
+function cntPoints() {
+  var out = [];
+  CNT.cands.forEach(function (c, i) { if (c.s >= CNT.thr && !CNT.removed[i]) out.push({ x: c.x, y: c.y, i: i, auto: true }); });
+  CNT.added.forEach(function (p, i) { out.push({ x: p.x, y: p.y, j: i, auto: false }); });
+  return out;
+}
+function cntRun() {
+  if (!CNT.gray || CNT.busy) return;
+  var prof = CNT.prof, tpls = prof ? cntProfTpls(prof.tpl) : [], negs = prof ? cntProfTpls(prof.neg) : [];
+  if (!CNT.boxes.length && !tpls.length) { CNT.mode = 'box'; renderCntWork(); toast('ลากกรอบรอบชิ้นงานตัวอย่างก่อน'); return; }
+  CNT.busy = true; CNT.err = ''; renderCntWork();
+  cntCall({ op: 'count', boxes: CNT.boxes, tpls: tpls, negs: negs, rot: CNT.rot, minScore: 0.3, objHint: prof && prof.obj ? prof.obj * CNT.src.width / (prof.imgW || CNT.src.width) : 0 }).then(function (r) {
+    CNT.busy = false; CNT.res = r; CNT.cands = r.cands; CNT.removed = {}; CNT.undo = [];
+    if (!CNT.boxes.length && prof && prof.thr) { CNT.thr = prof.thr; }
+    CNT.mode = 'edit'; renderCntWork();
+  }, function (err) { CNT.busy = false; CNT.err = err.message; renderCntWork(); });
+}
+function renderCntWork() {
+  var el = $('cntWork'); if (!el) return;
+  if ($('cntHelp')) $('cntHelp').classList.toggle('hidden', !!CNT.src);
+  if (!CNT.src) { el.innerHTML = ''; return; }
+  if (CNT.done) { el.innerHTML = cntDoneHtml(); bindCntDone(); return; }
+  var pts = cntPoints(), nAuto = pts.filter(function (p) { return p.auto; }).length, nRem = Object.keys(CNT.removed).length;
+  el.innerHTML =
+    '<div class="cnt-bar"><div class="seg">' +
+      '<button type="button" data-cm="box" class="' + (CNT.mode === 'box' ? 'active' : '') + '">✏ ลากกรอบ</button>' +
+      '<button type="button" data-cm="edit" class="' + (CNT.mode === 'edit' ? 'active' : '') + '">👆 แก้จุด</button></div>' +
+      '<button type="button" class="btn small' + (CNT.zoom > 1 ? ' active' : '') + '" id="cntZoom">🔍 ' + (CNT.zoom > 1 ? 'x' + CNT.zoom : 'ซูม') + '</button>' +
+      '<button type="button" class="btn small" id="cntUndo"' + (CNT.undo.length ? '' : ' disabled') + '>↶ ย้อน</button></div>' +
+    '<div class="cnt-hint small">' + (CNT.busy ? '⏳ กำลังนับ…' : CNT.err ? '<span class="err-text">⚠ ' + esc(CNT.err) + '</span>'
+      : CNT.mode === 'box' ? '✏ ลากกรอบรอบชิ้นงาน 1–3 ชิ้น (ให้พอดีชิ้น) แล้วกด ▶ นับ' : '👆 แตะชิ้นที่ยังไม่มีจุด = เพิ่ม · แตะจุด = ลบ') + '</div>' +
+    '<div class="cnt-stage' + (CNT.zoom > 1 ? ' zoomed' : '') + '" id="cntStage"><canvas id="cntCv"></canvas></div>' +
+    '<div class="cnt-res"><div class="cnt-num"><b id="cntNum">' + (CNT.res || CNT.added.length ? pts.length : '—') + '</b> <span>ชิ้น</span></div>' +
+      '<div class="small muted" id="cntDetail">' + (CNT.res ? 'อัตโนมัติ ' + nAuto + ' · เพิ่มเอง ' + CNT.added.length + ' · ลบ ' + nRem + (CNT.res.ms ? ' · ' + (CNT.res.ms / 1000).toFixed(1) + ' วิ' : '') : '') + '</div></div>' +
+    '<div class="cnt-ctl">' +
+      '<label class="cnt-thr">เกณฑ์ <span class="muted small">หลวม</span><input type="range" id="cntThr" min="0.35" max="0.9" step="0.01" value="' + CNT.thr + '"><span class="muted small">เข้ม</span></label>' +
+      '<label class="cnt-rot"><input type="checkbox" id="cntRot"' + (CNT.rot ? ' checked' : '') + '> ชิ้นงานวางหลายทิศ</label>' +
+      '<button type="button" class="btn" id="cntRun"' + (CNT.busy ? ' disabled' : '') + '>▶ นับ' + (CNT.res ? 'ใหม่' : '') + '</button>' +
+      (CNT.boxes.length ? '<button type="button" class="btn small" id="cntClearBox">ล้างกรอบ (' + CNT.boxes.length + ')</button>' : '') + '</div>' +
+    '<div class="actions"><button type="button" class="btn primary" id="cntOk"' + (pts.length && !CNT.busy ? '' : ' disabled') + '>✔ ยืนยัน ' + pts.length + ' ชิ้น</button></div>';
+  Array.prototype.forEach.call(el.querySelectorAll('[data-cm]'), function (b) { b.onclick = function () { CNT.mode = b.getAttribute('data-cm'); renderCntWork(); }; });
+  $('cntZoom').onclick = function () { CNT.zoom = CNT.zoom >= 3 ? 1 : CNT.zoom + 1; renderCntWork(); };
+  $('cntUndo').onclick = cntUndo;
+  $('cntThr').oninput = function () { CNT.thr = Number(this.value); store('pda_cnt_thr', CNT.thr); cntDraw(); cntUpdateNum(); };
+  $('cntRot').onchange = function () { CNT.rot = this.checked; store('pda_cnt_rot', CNT.rot ? '1' : '0'); };
+  $('cntRun').onclick = cntRun;
+  if ($('cntClearBox')) $('cntClearBox').onclick = function () { CNT.boxes = []; renderCntWork(); };
+  $('cntOk').onclick = cntConfirm;
+  cntBindCanvas();
+  cntDraw();
+}
+function cntUpdateNum() {
+  var pts = cntPoints(), nAuto = pts.filter(function (p) { return p.auto; }).length;
+  if ($('cntNum')) $('cntNum').textContent = pts.length;
+  if ($('cntDetail') && CNT.res) $('cntDetail').textContent = 'อัตโนมัติ ' + nAuto + ' · เพิ่มเอง ' + CNT.added.length + ' · ลบ ' + Object.keys(CNT.removed).length;
+  if ($('cntOk')) { $('cntOk').textContent = '✔ ยืนยัน ' + pts.length + ' ชิ้น'; $('cntOk').disabled = !pts.length; }
+  if ($('cntUndo')) $('cntUndo').disabled = !CNT.undo.length;
+}
+// ขนาดแสดงผล: รูป (gray) → จอ
+function cntView() {
+  var st = $('cntStage'), cv = $('cntCv'); if (!st || !cv || !CNT.src) return null;
+  var w = Math.max(200, (st.clientWidth || 320)) * CNT.zoom, k = w / CNT.src.width;
+  return { st: st, cv: cv, k: k, w: Math.round(w), h: Math.round(CNT.src.height * k) };
+}
+function cntDraw(tmpBox) {
+  var v = cntView(); if (!v) return;
+  var dpr = window.devicePixelRatio || 1, cv = v.cv;
+  if (cv.width !== Math.round(v.w * dpr) || cv.height !== Math.round(v.h * dpr)) { cv.width = Math.round(v.w * dpr); cv.height = Math.round(v.h * dpr); }
+  cv.style.width = v.w + 'px'; cv.style.height = v.h + 'px';
+  cv.style.touchAction = CNT.mode === 'box' ? 'none' : (CNT.zoom > 1 ? 'pan-x pan-y' : 'manipulation');
+  var ctx = cv.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.drawImage(CNT.src, 0, 0, v.w, v.h);
+  var k = v.k, objMin = CNT.res ? CNT.res.objMin : 30, r = Math.max(5, Math.min(16, objMin * k * 0.22));
+  var pts = cntPoints();
+  pts.forEach(function (p, n) {
+    var x = p.x * k, y = p.y * k;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fillStyle = p.auto ? 'rgba(18,183,106,.85)' : 'rgba(37,99,235,.9)'; ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = '#fff'; ctx.stroke();
+    if (r >= 8) { ctx.fillStyle = '#fff'; ctx.font = 'bold ' + Math.round(r * 0.95) + 'px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(String(n + 1), x, y + 0.5); }
+  });
+  ctx.lineWidth = 2.5; ctx.setLineDash([6, 4]); ctx.strokeStyle = '#f59e0b';
+  CNT.boxes.concat(tmpBox ? [tmpBox] : []).forEach(function (b) { ctx.strokeRect(b.x * k, b.y * k, b.w * k, b.h * k); });
+  ctx.setLineDash([]);
+}
+function cntBindCanvas() {
+  var cv = $('cntCv'); if (!cv) return;
+  var drag = null;
+  function pos(e) { var v = cntView(), r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) / v.k, y: (e.clientY - r.top) / v.k, k: v.k }; }
+  cv.addEventListener('pointerdown', function (e) {
+    if (CNT.mode !== 'box' || CNT.busy) return;
+    e.preventDefault(); cv.setPointerCapture(e.pointerId); var p = pos(e); drag = { x0: p.x, y0: p.y, x: p.x, y: p.y };
+  });
+  cv.addEventListener('pointermove', function (e) {
+    if (!drag) return; var p = pos(e); drag.x = p.x; drag.y = p.y;
+    cntDraw({ x: Math.min(drag.x0, drag.x), y: Math.min(drag.y0, drag.y), w: Math.abs(drag.x - drag.x0), h: Math.abs(drag.y - drag.y0) });
+  });
+  function end() {
+    if (!drag) return;
+    var b = { x: Math.min(drag.x0, drag.x), y: Math.min(drag.y0, drag.y), w: Math.abs(drag.x - drag.x0), h: Math.abs(drag.y - drag.y0) };
+    drag = null;
+    if (b.w * cntView().k < 10 || b.h * cntView().k < 10) { cntDraw(); return; }
+    CNT.boxes.push(b); if (CNT.boxes.length > 3) CNT.boxes.shift();
+    renderCntWork();
+    cntRun();
+  }
+  cv.addEventListener('pointerup', end); cv.addEventListener('pointercancel', function () { drag = null; cntDraw(); });
+  cv.addEventListener('click', function (e) {
+    if (CNT.mode !== 'edit' || CNT.busy) return;
+    var p = pos(e), objMin = CNT.res ? CNT.res.objMin : 30, near = null, best = Math.max(12 / p.k, objMin * 0.45);
+    cntPoints().forEach(function (q) { var d = Math.hypot(q.x - p.x, q.y - p.y); if (d < best) { best = d; near = q; } });
+    if (near) {
+      if (near.auto) { CNT.removed[near.i] = 1; CNT.undo.push({ t: 'rem', i: near.i }); }
+      else { var a = CNT.added.splice(near.j, 1)[0]; CNT.undo.push({ t: 'unadd', p: a, j: near.j }); }
+    } else { CNT.added.push({ x: Math.round(p.x * 10) / 10, y: Math.round(p.y * 10) / 10 }); CNT.undo.push({ t: 'add' }); }
+    cntDraw(); cntUpdateNum();
+  });
+}
+function cntUndo() {
+  var u = CNT.undo.pop(); if (!u) return;
+  if (u.t === 'rem') delete CNT.removed[u.i];
+  else if (u.t === 'add') CNT.added.pop();
+  else if (u.t === 'unadd') CNT.added.splice(u.j, 0, u.p);
+  cntDraw(); cntUpdateNum();
+}
+// ยืนยัน: จำการสอน (แม่แบบจากกรอบ + ชิ้นที่คนเพิ่ม = ตัวอย่าง · จุดที่คนลบ = ตัวที่ไม่ใช่) + เก็บข้อมูลเทรน
+function cntConfirm() {
+  var pts = cntPoints(), n = pts.length; if (!n) return;
+  var res = CNT.res || { objW: 30, objH: 30, tplsOut: [] }, ow = res.objW, oh = res.objH;
+  var added = CNT.added.slice(-3), removed = Object.keys(CNT.removed).map(Number).slice(-6).map(function (i) { return CNT.cands[i]; });
+  var items = added.concat(removed).map(function (p) { return { x: p.x, y: p.y, w: ow, h: oh }; });
+  var summary = { n: n, auto: pts.filter(function (p) { return p.auto; }).length, added: CNT.added.length, removed: Object.keys(CNT.removed).length };
+  CNT.done = { n: n, part: CNT.part, profMsg: CNT.part ? '⏳ กำลังจำการสอน…' : 'ไม่ได้ใส่รหัสพาร์ท — ไม่ได้จำการสอน', sampleMsg: '⏳ กำลังเก็บรูปไว้เทรน…' };
+  renderCntWork();
+  (items.length ? cntCall({ op: 'crop', items: items }) : Promise.resolve({ patches: [] })).then(function (cr) {
+    var enc = function (t) { return { w: t.w, h: t.h, b: b64FromU8(t.data) }; };
+    var newPos = (res.tplsOut || []).map(enc).concat(cr.patches.slice(0, added.length).map(enc));
+    var newNeg = cr.patches.slice(added.length).map(enc);
+    if (CNT.part) {
+      var old = CNT.prof || {}, prof = { v: 1, tn: 16, tpl: newPos.concat(old.tpl || []).slice(0, 8), neg: newNeg.concat(old.neg || []).slice(0, 16), thr: CNT.thr, rot: CNT.rot, obj: Math.round(res.objMin || 0), imgW: CNT.src.width };
+      var part = CNT.part;
+      api('saveCountProfile', part, prof, S.user).then(function (r) {
+        prof.uses = r.uses; prof.at = r.updated_at; CNT_PROFS[part] = prof; storeJson('pda_cnt_prof', CNT_PROFS);
+        if (CNT.part === part) { CNT.prof = prof; CNT.profState = 'ok'; renderCntProf(); }
+        if (CNT.done) { CNT.done.profMsg = '🧠 จำการสอนของ ' + esc(part) + ' แล้ว (ครั้งที่ ' + r.uses + ')'; renderCntWork(); }
+      }, function (err) {
+        CNT_PROFS[part] = prof; storeJson('pda_cnt_prof', CNT_PROFS); if (CNT.part === part) CNT.prof = prof;
+        if (CNT.done) { CNT.done.profMsg = '⚠ จำในเครื่องนี้แล้ว แต่ส่งขึ้นเซิร์ฟเวอร์ไม่ได้: ' + esc(err.message); renderCntWork(); }
+      });
+    }
+  }).catch(function (err) { if (CNT.done) { CNT.done.profMsg = '⚠ ' + esc(err.message); renderCntWork(); } });
+  // รูป + จุด (ข้อมูลเทรน)
+  var jpg = CNT.src.toDataURL('image/jpeg', 0.85).split(',')[1];
+  api('saveCountSample', { part: CNT.part, count: n, auto: summary.auto, added: summary.added, removed: summary.removed, thr: CNT.thr, by: S.user,
+    w: CNT.src.width, h: CNT.src.height, objW: Math.round(ow), objH: Math.round(oh), data: jpg,
+    points: pts.map(function (p) { return [Math.round(p.x), Math.round(p.y), p.auto ? 1 : 0]; }) }).then(function () {
+    if (CNT.done) { CNT.done.sampleMsg = '📦 เก็บรูป + จุดไว้เทรนแล้ว'; renderCntWork(); }
+  }, function (err) { if (CNT.done) { CNT.done.sampleMsg = '⚠ เก็บรูปไว้เทรนไม่ได้: ' + esc(err.message); renderCntWork(); } });
+}
+function cntDoneHtml() {
+  var d = CNT.done;
+  return '<div class="cnt-done"><div class="cnt-num"><b>' + d.n + '</b> <span>ชิ้น</span></div>' +
+    (d.part ? '<div>' + esc(d.part) + '</div>' : '') +
+    '<div class="small">' + d.profMsg + '</div><div class="small">' + d.sampleMsg + '</div>' +
+    '<div class="actions"><button type="button" class="btn primary" id="cntToManual">📝 บันทึกจำนวนนี้ (หน้ากรอกเอง)</button>' +
+      '<button type="button" class="btn" id="cntBack">← กลับไปแก้</button></div></div>';
+}
+function bindCntDone() {
+  $('cntToManual').onclick = function () {
+    var part = CNT.done.part, n = CNT.done.n;
+    S.view = 'manual'; render();
+    if (part && $('mfPart')) { $('mfPart').value = part; updatePartInfo(); }
+    if ($('mfQty')) { $('mfQty').value = String(n); $('mfQty').focus(); }
+    toast('ใส่จำนวน ' + n + ' จากการนับรูปแล้ว — เลือก Location แล้วกดบันทึก', 3500);
+  };
+  $('cntBack').onclick = function () { CNT.done = null; renderCntWork(); };
+}
+window.addEventListener('resize', function () { if (S.view === 'count' && CNT.src && !CNT.done) cntDraw(); });
 
 (function init() {
   render();

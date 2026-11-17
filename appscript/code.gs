@@ -18,7 +18,8 @@ const MAX_BATCH = 50;
 // ======================= Web App =======================
 const API_ACTIONS = { ping: ping, saveScans: saveScans, listScans: listScans, deleteScan: deleteScan, updateQty: updateQty, updateLocation: updateLocation, findByQr: findByQr, getScans: getScans, getTimeline: getTimeline, getPartPackages: getPartPackages, getLocationMap: getLocationMap, getLocationEvents: getLocationEvents,
   uploadPhoto: uploadPhoto, getPhoto: getPhoto, deletePhoto: deletePhoto,
-  getCountState: getCountState, setCountRound: setCountRound, markBinCounted: markBinCounted, getKingdeeMoves: getKingdeeMoves };
+  getCountState: getCountState, setCountRound: setCountRound, markBinCounted: markBinCounted, getKingdeeMoves: getKingdeeMoves,
+  getCountProfile: getCountProfile, saveCountProfile: saveCountProfile, saveCountSample: saveCountSample };
 
 function doPost(e) {
   let out;
@@ -927,4 +928,89 @@ function getKingdeeMoves(opt) {
     appOnly.reverse();
   }
   return { moves: out, appOnly: appOnly.slice(0, 100), snapAt: props.getProperty('KD_SNAP_AT') || '', lastPoll: props.getProperty('KD_LAST_POLL') || '', err: props.getProperty('KD_POLL_ERR') || '' };
+}
+
+
+// ======================= นับจากรูป (สอนเองที่หน้างาน) =======================
+// CountProfiles: แม่แบบที่สอนแล้วต่อรหัสพาร์ท (ทุกเครื่องใช้ร่วมกัน)
+// CountSamples + โฟลเดอร์ "PDA Count Samples": รูป + ตำแหน่งชิ้นงานที่คนยืนยันแล้ว → ใช้เทรนโมเดลภายหลัง
+const CNT_PROF_SHEET = 'CountProfiles';
+const CNT_PROF_HEADERS = ['part_code', 'updated_at', 'updated_by', 'uses', 'profile_json'];
+const CNT_SAMPLE_SHEET = 'CountSamples';
+const CNT_SAMPLE_HEADERS = ['at', 'part_code', 'count', 'auto', 'added', 'removed', 'threshold', 'by', 'file_id', 'file_url', 'width', 'height', 'obj_w', 'obj_h', 'points_json'];
+
+function cntSheet_(name, headers, textCols) {
+  const ss = book_();
+  let sh = ss.getSheetByName(name);
+  if (!sh) sh = ss.insertSheet(name);
+  if (sh.getLastRow() === 0) {
+    sh.getRange(1, 1, 1, headers.length).setValues([headers]);
+    sh.setFrozenRows(1);
+    (textCols || []).forEach(function (c) { sh.getRange(1, headers.indexOf(c) + 1, sh.getMaxRows(), 1).setNumberFormat('@'); });
+  }
+  return sh;
+}
+function cntFolder_() {
+  const props = PropertiesService.getScriptProperties();
+  const id = props.getProperty('COUNT_FOLDER_ID');
+  if (id) { try { return DriveApp.getFolderById(id); } catch (e) { /* ถูกลบ → สร้างใหม่ */ } }
+  const folder = DriveApp.createFolder('PDA Count Samples');
+  props.setProperty('COUNT_FOLDER_ID', folder.getId());
+  return folder;
+}
+
+/** แม่แบบที่สอนแล้วของรหัสพาร์ทนี้ (ไม่มี = null) */
+function getCountProfile(part) {
+  part = clean_(part, 80).toUpperCase(); if (!part) return null;
+  const sh = book_().getSheetByName(CNT_PROF_SHEET);
+  if (!sh || sh.getLastRow() < 2) return null;
+  const vals = sh.getRange(2, 1, sh.getLastRow() - 1, CNT_PROF_HEADERS.length).getValues();
+  for (let i = 0; i < vals.length; i++) {
+    if (String(vals[i][0]).toUpperCase() === part) {
+      let prof = null; try { prof = JSON.parse(String(vals[i][4] || 'null')); } catch (e) { prof = null; }
+      return { part: part, updated_at: fmt_(vals[i][1]), updated_by: String(vals[i][2] || ''), uses: Number(vals[i][3]) || 0, profile: prof };
+    }
+  }
+  return null;
+}
+
+/** บันทึก/อัปเดตแม่แบบของรหัสพาร์ท */
+function saveCountProfile(part, profile, by) {
+  part = clean_(part, 80).toUpperCase(); if (!part) throw new Error('ไม่มีรหัสพาร์ท');
+  const json = JSON.stringify(profile || {});
+  if (json.length > 48000) throw new Error('ข้อมูลการสอนใหญ่เกินไป');
+  const lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try {
+    const sh = cntSheet_(CNT_PROF_SHEET, CNT_PROF_HEADERS, ['part_code', 'profile_json']);
+    const n = sh.getLastRow() - 1, now = new Date();
+    if (n > 0) {
+      const codes = sh.getRange(2, 1, n, 4).getValues();
+      for (let i = 0; i < n; i++) {
+        if (String(codes[i][0]).toUpperCase() === part) {
+          sh.getRange(i + 2, 2, 1, 4).setValues([[now, clean_(by, 60), (Number(codes[i][3]) || 0) + 1, json]]);
+          return { part: part, uses: (Number(codes[i][3]) || 0) + 1, updated_at: fmt_(now) };
+        }
+      }
+    }
+    sh.getRange(sh.getLastRow() + 1, 1, 1, CNT_PROF_HEADERS.length).setValues([[part, now, clean_(by, 60), 1, json]]);
+    return { part: part, uses: 1, updated_at: fmt_(now) };
+  } finally { lock.releaseLock(); }
+}
+
+/** เก็บรูป + ตำแหน่งชิ้นงานที่ยืนยันแล้ว (ข้อมูลสำหรับเทรน) */
+function saveCountSample(p) {
+  p = p || {};
+  if (!p.data) throw new Error('ไม่มีรูป');
+  const bytes = Utilities.base64Decode(String(p.data));
+  if (bytes.length > MAX_PHOTO_BYTES) throw new Error('รูปใหญ่เกิน 5MB');
+  const part = clean_(p.part, 80).toUpperCase(), now = new Date();
+  const name = [(part || 'NOPART').replace(/[\/:*?"<>|]/g, '_'), Utilities.formatDate(now, TZ, 'yyyyMMdd-HHmmss'), 'n' + (Number(p.count) || 0)].join('_') + '.jpg';
+  const file = cntFolder_().createFile(Utilities.newBlob(bytes, 'image/jpeg', name));
+  let pts = JSON.stringify(Array.isArray(p.points) ? p.points : []);
+  if (pts.length > 48000) pts = pts.slice(0, 48000);
+  const sh = cntSheet_(CNT_SAMPLE_SHEET, CNT_SAMPLE_HEADERS, ['part_code', 'points_json']);
+  sh.getRange(sh.getLastRow() + 1, 1, 1, CNT_SAMPLE_HEADERS.length).setValues([[
+    now, part, Number(p.count) || 0, Number(p.auto) || 0, Number(p.added) || 0, Number(p.removed) || 0, Number(p.thr) || 0,
+    clean_(p.by, 60), file.getId(), file.getUrl(), Number(p.w) || 0, Number(p.h) || 0, Number(p.objW) || 0, Number(p.objH) || 0, pts]]);
+  return { file_id: file.getId(), at: fmt_(now) };
 }

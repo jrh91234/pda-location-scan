@@ -546,3 +546,25 @@ main.view-kd > .map-top, .map-top.tall { position: static; }
 .kdm-dates .field { margin: 0; padding: 6px 8px; min-height: 0; width: auto; }
 .kdm-rangeinfo { margin: 2px 0 4px; }
 @media (max-width: 999px) { #kdMoves .find-list { max-height: none; } }
+
+/* นับจากรูป */
+@media (max-width: 560px) { .tabs { overflow-x: auto; scrollbar-width: none; } .tabs::-webkit-scrollbar { display: none; } .tabs button { flex: 1 0 auto; padding-left: 9px; padding-right: 9px; } }
+.cnt-prof { margin: 4px 0 8px; }
+.cnt-shot { display: block; text-align: center; margin: 6px 0; cursor: pointer; }
+.cnt-help { padding: 0 4px; }
+.cnt-help ol { margin: 4px 0 0 18px; padding: 0; }
+.cnt-bar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+.cnt-hint { margin: 6px 0; min-height: 1.4em; }
+.cnt-stage { position: relative; border-radius: 10px; overflow: hidden; background: #111; }
+.cnt-stage.zoomed { overflow: auto; max-height: 70vh; -webkit-overflow-scrolling: touch; }
+.cnt-stage canvas { display: block; }
+.cnt-res { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+.cnt-num b { font-size: 40px; line-height: 1; color: #067647; }
+.cnt-num span { font-size: 16px; font-weight: 600; }
+.cnt-ctl { display: flex; gap: 8px 12px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
+.cnt-thr { display: flex; align-items: center; gap: 6px; margin: 0; font-weight: 500; }
+.cnt-thr input { width: 130px; }
+.cnt-rot { display: flex; align-items: center; gap: 6px; margin: 0; font-weight: 500; }
+.cnt-done { text-align: center; padding: 12px 0; }
+.cnt-done .cnt-num b { font-size: 56px; }
+.cnt-done .small { margin-top: 6px; }
