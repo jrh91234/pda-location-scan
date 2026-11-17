@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261117-0911'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261117-0944'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -3244,7 +3244,8 @@ function kdTopHtml() {
       '<button class="btn small' + (KDM.trail ? ' active' : '') + '" id="kdTrail" title="ลูกศร 10 ความเคลื่อนไหว Kingdee ล่าสุด">➜ ความเคลื่อนไหว</button>' +
     '</div>' +
     '<div id="kdRound" class="kd-round"></div>' +
-    '<div class="kdf-bar"><input id="kdfQ" class="field" autocomplete="off" autocapitalize="characters" spellcheck="false" enterkeyhint="search" placeholder="สแกน / พิมพ์ รหัส หรือ Lot → ดูว่า Kingdee บอกอยู่ช่องไหน" value="' + esc(KDF.q) + '">' +
+    '<div class="kdf-bar"><div class="ac-wrap kdf-wrap"><input id="kdfQ" class="field" autocomplete="off" spellcheck="false" enterkeyhint="search" placeholder="สแกน / พิมพ์ รหัส · Lot · ชื่อพาร์ท · Spec" value="' + esc(KDF.q) + '">' +
+      '<div id="kdfSug" class="ac-list hidden" role="listbox"></div></div>' +
       '<button class="btn primary" id="kdfCam" title="เปิดกล้องสแกนป้าย">📸 สแกน</button></div>' +
     '<div id="kdFind"></div>' +
     '<div class="map-legend small">' + Object.keys(KD_ST).map(function (k) {
@@ -3548,13 +3549,30 @@ function kdTrailActions() {
 
 // ===== หา "Kingdee บอกว่าอยู่ช่องไหน" จากการสแกนป้ายหน้างาน (กล้อง / ปืนสแกน / พิมพ์) =====
 // hits: { ช่อง: 'lot' (รหัส+Lot ตรง → กระพริบแดง) | 'part' (รหัสตรงแต่คนละ Lot → กรอบส้ม) }
-var KDF = { q: '', part: '', lot: '', hits: null, list: [], appLocs: [], all: false, pkg: '', qty: '', unit: '', qr: '', pkgRec: null, pkgState: '' };
+var KDF = { q: '', part: '', lot: '', parts: null, hits: null, list: [], appLocs: [], all: false, pkg: '', qty: '', unit: '', qr: '', pkgRec: null, pkgState: '' };
+// รหัสใน Kingdee ที่ รหัส / ชื่อ / Spec มีทุกคำที่พิมพ์ → [{ part, name, spec, bins, score }]
+function kdPartSearch(q, max) {
+  var words = String(q || '').trim().toUpperCase().split(/\s+/).filter(String); if (!words.length) return [];
+  var by = {};
+  KD.rows.forEach(function (r) {
+    var e = by[r[1]] || (by[r[1]] = { part: r[1], name: r[5], spec: r[6], bins: {} }); e.bins[r[0]] = 1;
+  });
+  var out = [];
+  Object.keys(by).forEach(function (k) {
+    var e = by[k], code = k.toUpperCase(), hay = code + ' ' + String(e.name).toUpperCase() + ' ' + String(e.spec).toUpperCase();
+    if (!words.every(function (w) { return hay.indexOf(w) >= 0; })) return;
+    e.score = code.indexOf(words[0]) === 0 ? 0 : code.indexOf(words[0]) > 0 ? 1 : String(e.name).toUpperCase().indexOf(words[0]) === 0 ? 2 : 3;
+    e.n = Object.keys(e.bins).length; out.push(e);
+  });
+  out.sort(function (a, b) { return a.score - b.score || b.n - a.n || (a.part < b.part ? -1 : 1); });
+  return max ? out.slice(0, max) : out;
+}
 function kdfRun(raw, jump) {
   var chk = checkScan(raw), text = (chk.text || String(raw || '')).trim();
   if (!text) { kdfClear(); return; }
   var loc = asLocation(text);
   if (loc) { KDF.q = ''; KDF.hits = null; KDF.list = []; renderKdFind(); if ($('kdfQ')) $('kdfQ').value = ''; mapGotoCell(loc); setTimeout(function () { openKdCell(loc); }, 400); return; }
-  var p = parseQr(text), part = '', lot = '';
+  var p = parseQr(text), part = '', lot = '', parts = null;
   KDF.pkg = ''; KDF.qty = ''; KDF.unit = ''; KDF.qr = ''; KDF.pkgRec = null; KDF.pkgState = '';
   if (p.format !== 'text' && p.part_code) {
     part = p.part_code.toUpperCase(); lot = p.lot_no;
@@ -3565,12 +3583,19 @@ function kdfRun(raw, jump) {
     var u = text.toUpperCase();
     if (KD.rows.some(function (r) { return r[1].toUpperCase() === u; })) part = u;
     else if (KD.rows.some(function (r) { return r[2].toUpperCase() === u; })) lot = text;
-    else part = u;
+    else {
+      // ไม่ตรงรหัส / Lot → หาจากชื่อพาร์ท / Spec / บางส่วนของรหัส
+      var found = kdPartSearch(text);
+      if (found.length === 1) part = found[0].part.toUpperCase();
+      else if (found.length > 1) { parts = {}; found.forEach(function (f) { parts[f.part.toUpperCase()] = 1; }); }
+      else part = u;
+    }
   }
-  KDF.q = text; KDF.part = part; KDF.lot = lot; KDF.all = false;
+  KDF.q = text; KDF.part = part; KDF.lot = lot; KDF.parts = parts; KDF.all = false;
+  function partOk(code) { code = String(code).toUpperCase(); return parts ? !!parts[code] : (!part || code === part); }
   var hits = {}, by = {};
   KD.rows.forEach(function (r) {
-    var pOk = !part || r[1].toUpperCase() === part, lOk = !lot || r[2].toUpperCase() === lot.toUpperCase();
+    var pOk = partOk(r[1]), lOk = !lot || r[2].toUpperCase() === lot.toUpperCase();
     var kind = pOk && lOk ? 'lot' : (part && pOk ? 'part' : '');
     if (!kind) return;
     if (hits[r[0]] !== 'lot') hits[r[0]] = kind;
@@ -3584,7 +3609,7 @@ function kdfRun(raw, jump) {
   var app = {};
   mapAllItems().forEach(function (it) {
     if (isTestUser(it.by)) return;
-    if ((!part || String(it.part).toUpperCase() === part) && (!lot || String(it.lot).toUpperCase() === lot.toUpperCase())) app[it.loc] = 1;
+    if (partOk(it.part) && (!lot || String(it.lot).toUpperCase() === lot.toUpperCase())) app[it.loc] = 1;
   });
   KDF.appLocs = Object.keys(app).sort();
   if ($('kdfQ')) $('kdfQ').value = text;
@@ -3625,7 +3650,7 @@ function kdfPkgHtml() {
   return '<div class="kdf-pkg">' + head + body + '</div>';
 }
 function kdfClear() {
-  KDF.q = ''; KDF.hits = null; KDF.list = []; KDF.appLocs = []; KDF.qr = ''; KDF.pkgRec = null; KDF.pkgState = '';
+  KDF.q = ''; KDF.hits = null; KDF.list = []; KDF.appLocs = []; KDF.qr = ''; KDF.parts = null; KDF.pkgRec = null; KDF.pkgState = '';
   if ($('kdfQ')) $('kdfQ').value = '';
   renderKdFind(); if (MAP.data) renderMapGrid();
 }
@@ -3641,15 +3666,19 @@ function renderKdFind() {
     return '<button type="button" class="find-item" data-kdfc="' + esc(e.loc) + '"><span class="kd-ico">' + (e.kind === 'lot' ? '📍' : '🔸') + '</span><span class="find-main">' +
       '<span class="find-top"><span class="loc-pill">' + esc(e.loc) + '</span> <b>' + kdFmt(e.q) + '</b> <span class="small muted">' + esc(e.unit) + '</span>' +
         (inApp ? ' <span class="kdm-ok">✓ แอปสแกนไว้ช่องนี้</span>' : '') + '</span>' +
-      '<span class="find-sub">' + (KDF.part ? '' : Object.keys(e.parts).map(function (pc) { return esc(pc) + (kdSpecOf(pc) ? ' ' + kdSpecHtml(pc) : ''); }).join(', ') + ' · ') + lotTxt + '</span></span></button>';
+      '<span class="find-sub">' + (KDF.part ? '' : Object.keys(e.parts).map(function (pc) {
+          var nm = KDF.parts ? (KD.rows.filter(function (r) { return r[1] === pc; })[0] || [])[5] : '';
+          return '<b>' + esc(pc) + '</b>' + (nm ? ' ' + esc(nm) : '') + (kdSpecOf(pc) ? ' ' + kdSpecHtml(pc) : '');
+        }).join(', ') + ' · ') + lotTxt + '</span></span></button>';
   }
   var appOnly = KDF.appLocs.filter(function (l) { return !KDF.hits[l]; });
   el.innerHTML = '<div class="find-box kdf-box">' +
-    '<div class="kdm-head"><span>' + [KDF.part ? '<b>' + esc(KDF.part) + '</b>' : '', KDF.lot ? 'Lot <b>' + esc(KDF.lot) + '</b>' : ''].filter(String).join(' · ') + (name ? ' <span class="small muted">' + esc(name) + '</span>' : '') + (KDF.part && kdSpecOf(KDF.part) ? ' ' + kdSpecHtml(KDF.part) : '') + '</span>' +
+    '<div class="kdm-head"><span>' + [KDF.part ? '<b>' + esc(KDF.part) + '</b>' : '', KDF.lot ? 'Lot <b>' + esc(KDF.lot) + '</b>' : '',
+        KDF.parts ? '🔎 "<b>' + esc(KDF.q) + '</b>" เจอ <b>' + Object.keys(KDF.parts).length + '</b> รหัส' : ''].filter(String).join(' · ') + (name ? ' <span class="small muted">' + esc(name) + '</span>' : '') + (KDF.part && kdSpecOf(KDF.part) ? ' ' + kdSpecHtml(KDF.part) : '') + '</span>' +
       '<button type="button" class="btn small" id="kdfX">✕ ล้าง</button></div>' + kdfPkgHtml() +
     (lots.length ? '<div class="small">📍 Kingdee บอกว่าอยู่ <b>' + lots.length + '</b> ช่อง (กระพริบแดงบนผัง)</div><div class="find-list">' + lots.slice(0, lim).map(row).join('') + '</div>' +
         (lots.length > lim ? '<button type="button" class="btn small" id="kdfMore">ดูทั้งหมด ' + lots.length + ' ช่อง</button>' : '')
-      : '<div class="msg warn small">Kingdee ไม่มี' + (KDF.lot ? ' Lot นี้' : 'รหัสนี้') + 'ในช่องไหนเลย' + (others.length ? '' : ' (หรือยอดเป็น 0 / อยู่ Public area)') + '</div>') +
+      : '<div class="msg warn small">Kingdee ไม่มี' + (KDF.lot ? ' Lot นี้' : 'รหัส / ชื่อนี้') + 'ในช่องไหนเลย' + (others.length ? '' : ' (หรือยอดเป็น 0 / อยู่ Public area)') + '</div>') +
     (others.length ? '<details class="kdm-apponly"' + (lots.length ? '' : ' open') + '><summary>🔸 รหัสเดียวกัน คนละ Lot (' + others.length + ' ช่อง · กรอบส้มบนผัง)</summary><div class="find-list">' + others.slice(0, 40).map(row).join('') + '</div></details>' : '') +
     (appOnly.length ? '<div class="small kdf-app">📱 แอปสแกนไว้ที่ ' + appOnly.map(function (l) { return '<button type="button" class="loc-pill kdf-al" data-kdfc="' + esc(l) + '">' + esc(l) + '</button>'; }).join(' ') + ' <span class="muted">— แต่ Kingdee ไม่ได้บอกว่าอยู่ช่องนี้</span></div>' : '') +
   '</div>';
@@ -3660,8 +3689,27 @@ function renderKdFind() {
   });
 }
 function bindKdFind() {
-  var inp = $('kdfQ'); if (!inp) return;
-  inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); kdfRun(inp.value); inp.blur(); } });
+  var inp = $('kdfQ'), sug = $('kdfSug'), timer = 0; if (!inp) return;
+  function hide() { sug.classList.add('hidden'); sug.innerHTML = ''; }
+  function show() {
+    var v = inp.value.trim();
+    if (v.length < 2 || looksLikeScan(v)) { hide(); return; }
+    var list = kdPartSearch(v, 8);
+    if (!list.length) { hide(); return; }
+    sug.innerHTML = list.map(function (e) {
+      return '<button type="button" class="ac-item" data-kdfp="' + esc(e.part) + '"><span class="ac-code">' + markQ(e.part, v) + ' <span class="small muted">· ' + e.n + ' ช่อง</span></span>' +
+        (e.name ? '<span class="ac-name">' + markQ(e.name, v) + '</span>' : '') + (e.spec ? '<span class="ac-spec">' + markQ(e.spec, v) + '</span>' : '') + '</button>';
+    }).join('');
+    sug.classList.remove('hidden');
+    Array.prototype.forEach.call(sug.querySelectorAll('[data-kdfp]'), function (b) {
+      b.onmousedown = function (ev) { ev.preventDefault(); };
+      b.onclick = function () { hide(); kdfRun(b.getAttribute('data-kdfp')); inp.blur(); };
+    });
+  }
+  inp.addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(show, 150); });
+  inp.addEventListener('focus', show);
+  inp.addEventListener('blur', function () { setTimeout(hide, 200); });
+  inp.addEventListener('keydown', function (e) { if (e.key === 'Escape') hide(); if (e.key === 'Enter') { e.preventDefault(); hide(); kdfRun(inp.value); inp.blur(); } });
   // ปืนสแกน (DataWedge) บางเครื่องไม่ส่ง Enter → ข้อความที่ดูเป็นป้ายให้ค้นเลย
   inp.addEventListener('change', function () { if (inp.value.trim() !== KDF.q) kdfRun(inp.value); });
   $('kdfCam').onclick = function () { openCameraScanner(function (raw) { kdfRun(raw); }); };

@@ -536,3 +536,6 @@ main.view-kd > .map-top, .map-top.tall { position: static; }
 .cell.kdf-pkg-cell { z-index: 3; box-shadow: 0 0 0 3px #fff, 0 0 0 6px #2563eb; }
 .cell.kdf-pkg-cell::after { content: '📦'; position: absolute; top: -10px; right: -8px; font-size: 12px; }
 .kd-spec { display: inline-block; font-size: 12px; color: #175cd3; background: #eff8ff; border-radius: 5px; padding: 0 5px; font-weight: 500; }
+.kdf-wrap { flex: 1; min-width: 0; }
+.kdf-wrap .field { width: 100%; }
+.kdf-wrap .ac-list { z-index: 40; }
