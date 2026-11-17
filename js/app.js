@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261117-0902'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261117-0911'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -3331,7 +3331,7 @@ function renderKdList(x) {
       return '<button type="button" class="find-item" data-kdc="' + loc + '"><span class="kd-ico">' + KD_ST[b.st][0] + '</span>' +
         '<span class="find-main"><span class="find-top"><span class="loc-pill">' + loc + '</span> ' + KD_ST[b.st][1] + (b.marked ? ' ✔' : '') + '</span>' +
         '<span class="find-sub muted">Kingdee ' + b.nk + ' รายการ · นับได้ ' + b.na + ' รายการ' + (b.nd && b.st === 'diff' ? ' · ต่าง ' + b.nd : '') + '</span>' +
-        (first ? '<span class="find-sub">' + esc(first.part) + (first.lot ? ' · ' + esc(first.lot) : '') + (b.keys.length > 1 ? ' +' + (b.keys.length - 1) : '') + '</span>' : '') +
+        (first ? '<span class="find-sub">' + esc(first.part) + (first.lot ? ' · ' + esc(first.lot) : '') + (b.keys.length > 1 ? ' +' + (b.keys.length - 1) : '') + (kdSpecOf(first.part) ? ' · ' + kdSpecHtml(first.part) : '') + '</span>' : '') +
         '</span></button>';
     }).join('') + '</div>' + (list.length > lim ? '<button type="button" class="btn small" id="kdMore">ดูเพิ่ม (อีก ' + (list.length - lim) + ' ช่อง)</button>' : '') +
       (KD.more ? ' <button type="button" class="btn small" id="kdLess">ย่อ</button>' : '')
@@ -3345,6 +3345,15 @@ function renderKdList(x) {
   if ($('kdMore')) $('kdMore').onclick = function () { KD.more = (KD.more || 0) + 30; renderKdList(kdCompute()); };
   if ($('kdLess')) $('kdLess').onclick = function () { KD.more = 0; renderKdList(kdCompute()); };
 }
+// Spec ของรหัส (Kingdee ก่อน → BOM)
+function kdSpecOf(part) {
+  if (!kdSpecOf.map || kdSpecOf.n !== KD.rows.length) {
+    kdSpecOf.map = {}; kdSpecOf.n = KD.rows.length;
+    KD.rows.forEach(function (r) { if (r[6] && !kdSpecOf.map[r[1]]) kdSpecOf.map[r[1]] = r[6]; });
+  }
+  return kdSpecOf.map[part] || (bomInfo(part) || {}).spec || '';
+}
+function kdSpecHtml(part) { var sp = kdSpecOf(part); return sp ? '<span class="kd-spec">' + esc(sp) + '</span>' : ''; }
 // ตารางเทียบในช่อง
 function kdTableHtml(b, compact) {
   if (!b || !b.keys.length) return '<div class="muted small center pad">ทั้ง Kingdee และในแอปไม่มีของในช่องนี้</div>';
@@ -3354,7 +3363,8 @@ function kdTableHtml(b, compact) {
       var diff = y.k && y.a && !y.a.noQty && !y.unitBad ? y.a.q - y.k.q : null;
       var ico = y.eq ? '✅' : !y.a ? (b.st === 'todo' ? '○' : '❌') : !y.k ? '➕' : '⚠';
       return '<tr class="' + (y.eq ? 'ok' : 'bad') + '"><td><span class="kd-ico">' + ico + '</span><b>' + esc(y.part) + '</b>' + (y.lot ? '<br><span class="small">Lot ' + esc(y.lot) + '</span>' : '') +
-          (name && !compact ? '<br><span class="small muted">' + esc(name) + '</span>' : '') + '</td>' +
+          (name && !compact ? '<br><span class="small muted">' + esc(name) + '</span>' : '') +
+          (kdSpecOf(y.part) ? '<br>' + kdSpecHtml(y.part) : '') + '</td>' +
         '<td class="num">' + (y.k ? kdFmt(y.k.q) + ' <span class="small muted">' + esc(y.k.unit) + '</span>' : '—') + '</td>' +
         '<td class="num">' + (y.a ? (y.a.noQty ? '<span class="small">ไม่ระบุจำนวน</span>' : kdFmt(y.a.q)) + ' <span class="small muted">' + esc(y.a.unit) + '</span><br><span class="small muted">' + y.a.n + ' กล่อง' + (y.a.pending ? ' · รอส่ง ' + y.a.pending : '') + '</span>' : '—') + '</td>' +
         (compact ? '' : '<td class="num">' + (y.unitBad ? '<span class="small">หน่วยต่างกัน</span>' : diff == null ? (y.k && !y.a ? '−' + kdFmt(y.k.q) : y.a && !y.k ? '+' + kdFmt(y.a.q) : '') : diff ? (diff > 0 ? '+' : '') + kdFmt(diff) : '0') + '</td>') +
@@ -3488,7 +3498,7 @@ function kdmRowHtml(m, showLoc) {
     '<span class="kd-ico">' + t[0] + '</span><span class="find-main">' +
     '<span class="find-top">' + (showLoc !== false ? where + ' ' : '') + '<b>' + t[1] + ' ' + sign + kdFmt(m[6]) + '</b> <span class="small muted">' + esc(m[7]) + '</span>' +
       (m[9] === 'kd_only' ? ' <span class="kdm-flag" title="Kingdee มีรายการนี้ แต่วันนี้ยังไม่มีใครสแกนในแอป">ไม่ได้สแกน</span>' : m[9] === 'ok' ? ' <span class="kdm-ok" title="แอปมีการสแกนรายการนี้ในวันเดียวกัน">✓ สแกนแล้ว</span>' : '') + '</span>' +
-    '<span class="find-sub">' + esc(m[2]) + (m[3] ? ' · Lot ' + esc(m[3]) : '') + ((m[8] || info.name) ? ' · ' + esc(m[8] || info.name) : '') + '</span>' +
+    '<span class="find-sub">' + esc(m[2]) + (m[3] ? ' · Lot ' + esc(m[3]) : '') + ((m[8] || info.name) ? ' · ' + esc(m[8] || info.name) : '') + (kdSpecOf(m[2]) ? ' · ' + kdSpecHtml(m[2]) : '') + '</span>' +
     '<span class="find-sub muted">' + esc(fmtWhen(m[0])) + ' · ' + esc(agoText(m[0])) + '</span></span></button>';
 }
 function renderKdMoves() {
@@ -3631,11 +3641,11 @@ function renderKdFind() {
     return '<button type="button" class="find-item" data-kdfc="' + esc(e.loc) + '"><span class="kd-ico">' + (e.kind === 'lot' ? '📍' : '🔸') + '</span><span class="find-main">' +
       '<span class="find-top"><span class="loc-pill">' + esc(e.loc) + '</span> <b>' + kdFmt(e.q) + '</b> <span class="small muted">' + esc(e.unit) + '</span>' +
         (inApp ? ' <span class="kdm-ok">✓ แอปสแกนไว้ช่องนี้</span>' : '') + '</span>' +
-      '<span class="find-sub">' + (KDF.part ? '' : esc(Object.keys(e.parts).join(', ')) + ' · ') + lotTxt + '</span></span></button>';
+      '<span class="find-sub">' + (KDF.part ? '' : Object.keys(e.parts).map(function (pc) { return esc(pc) + (kdSpecOf(pc) ? ' ' + kdSpecHtml(pc) : ''); }).join(', ') + ' · ') + lotTxt + '</span></span></button>';
   }
   var appOnly = KDF.appLocs.filter(function (l) { return !KDF.hits[l]; });
   el.innerHTML = '<div class="find-box kdf-box">' +
-    '<div class="kdm-head"><span>' + [KDF.part ? '<b>' + esc(KDF.part) + '</b>' : '', KDF.lot ? 'Lot <b>' + esc(KDF.lot) + '</b>' : ''].filter(String).join(' · ') + (name ? ' <span class="small muted">' + esc(name) + '</span>' : '') + '</span>' +
+    '<div class="kdm-head"><span>' + [KDF.part ? '<b>' + esc(KDF.part) + '</b>' : '', KDF.lot ? 'Lot <b>' + esc(KDF.lot) + '</b>' : ''].filter(String).join(' · ') + (name ? ' <span class="small muted">' + esc(name) + '</span>' : '') + (KDF.part && kdSpecOf(KDF.part) ? ' ' + kdSpecHtml(KDF.part) : '') + '</span>' +
       '<button type="button" class="btn small" id="kdfX">✕ ล้าง</button></div>' + kdfPkgHtml() +
     (lots.length ? '<div class="small">📍 Kingdee บอกว่าอยู่ <b>' + lots.length + '</b> ช่อง (กระพริบแดงบนผัง)</div><div class="find-list">' + lots.slice(0, lim).map(row).join('') + '</div>' +
         (lots.length > lim ? '<button type="button" class="btn small" id="kdfMore">ดูทั้งหมด ' + lots.length + ' ช่อง</button>' : '')
