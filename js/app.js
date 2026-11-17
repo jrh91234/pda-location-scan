@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261117-1938'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261117-2236'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -3622,7 +3622,8 @@ function kdmDaily(list) {
     var d = workShiftDate(m[0]), e = days[d] || (days[d] = { d: d, in: 0, out: 0, move: 0, trips: {}, hours: {}, qin: 0, qout: 0 });
     e[m[1]] = (e[m[1]] || 0) + 1;
     if (m[1] === 'in') e.qin += m[6]; else if (m[1] === 'out') e.qout += m[6];
-    e.trips[m[0] + '|' + m[1] + '|' + (m[1] === 'in' ? m[5] : m[4])] = 1;
+    // จ่ายออกจากช่องเดียวกันในเวลาเดียวกัน (ออก + ย้ายออก) = 1 เที่ยว · เอาเข้าช่องเดียวกันในเวลาเดียวกัน = 1 เที่ยว
+    e.trips[m[0] + '|' + (m[1] === 'in' ? 'to|' + m[5] : 'from|' + m[4])] = 1;
     var h = String(m[0]).slice(11, 13); e.hours[h] = (e.hours[h] || 0) + 1;
   });
   return Object.keys(days).sort().reverse().map(function (k) {
@@ -3647,7 +3648,7 @@ function kdmDailyHtml(list) {
     }).join('') +
     (rows.length > 1 ? '<tr class="kdm-total"><td>รวม</td><td class="num">' + t.in + '</td><td class="num">' + t.out + '</td><td class="num">' + t.move + '</td><td class="num"><b>' + t.nTrips + '</b></td><td class="num">' + kdmMinText(t.mins) + '</td><td class="num">เฉลี่ย ' + kdmMinText(t.mins / rows.length) + '/วัน</td></tr>' : '') +
     '</tbody></table></div>' +
-    '<div class="small muted">* เที่ยว = รายการแบบเดียวกัน (เข้า/ออก/ย้าย) ที่ช่องเดียวกันในรอบตรวจเดียวกัน (ทุก 10 นาที) นับเป็น 1 เที่ยว · นับจากยอด Kingdee ที่เปลี่ยน เฉพาะช่องในผัง (ไม่รวม Public area) · เวลา = เที่ยว × เวลาต่อเที่ยว' +
+    '<div class="small muted">* เที่ยว = จ่ายออก (ออก/ย้ายออก) จากช่องเดียวกันในเวลาเดียวกัน นับเป็น 1 เที่ยว · เอาเข้าช่องเดียวกันในเวลาเดียวกัน นับเป็น 1 เที่ยว (เวลาเดียวกัน = รอบตรวจเดียวกัน ทุก 10 นาที) · นับจากยอด Kingdee ที่เปลี่ยน เฉพาะช่องในผัง (ไม่รวม Public area) · เวลา = เที่ยว × เวลาต่อเที่ยว' +
       (KDM.range === 'all' ? ' · "ล่าสุดทั้งหมด" ดึงมาแค่ 800 รายการล่าสุด — เลือก 7 วัน / เลือกวัน เพื่อข้อมูลครบ' : '') + '</div></details>';
 }
 function exportKdmDaily() {
