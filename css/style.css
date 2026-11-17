@@ -539,3 +539,4 @@ main.view-kd > .map-top, .map-top.tall { position: static; }
 .kdf-wrap { flex: 1; min-width: 0; }
 .kdf-wrap .field { width: 100%; }
 .kdf-wrap .ac-list { z-index: 40; }
+.kd-when { font-size: 11px; color: #475467; white-space: nowrap; }

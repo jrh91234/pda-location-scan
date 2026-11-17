@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261117-1003'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261117-1058'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -3209,6 +3209,7 @@ function kdCompute() {
     var e = b[x] || (b[x] = { part: it.part, lot: lot ? it.lot : '', q: 0, unit: it.unit || '', n: 0, noQty: 0, pending: 0, lots: {} });
     var q = kdNum(it.qty); if (q == null) e.noQty++; else e.q += q;
     e.n++; if (it.pending) e.pending++; e.lots[it.lot] = 1;
+    if (it.at) { if (!e.at || it.at > e.at) { e.at = it.at; e.by = it.by; } if (!e.at0 || it.at < e.at0) e.at0 = it.at; }
   });
   var map = (MAP.data && MAP.data.map) || {}, out = {}, sum = { todo: 0, match: 0, diff: 0, missing: 0, extra: 0, kBins: 0, counted: 0 };
   Object.keys(K).concat(Object.keys(A)).forEach(function (loc) {
@@ -3228,7 +3229,7 @@ function kdCompute() {
     var counted = !round || !!marked || !!(last && last >= round.start) || keys.some(function (y) { return y.a && y.a.pending; });
     var st = !nk ? 'extra' : !na ? (marked ? 'missing' : 'todo') : nd ? 'diff' : 'match';
     if (round && !counted) st = 'todo';
-    out[loc] = { st: st, keys: keys, nk: nk, na: na, nd: nd, marked: marked, counted: counted, last: last };
+    out[loc] = { loc: loc, st: st, keys: keys, nk: nk, na: na, nd: nd, marked: marked, counted: counted, last: last };
     sum[st]++;
     if (nk) { sum.kBins++; if (st !== 'todo') sum.counted++; }
   });
@@ -3346,6 +3347,16 @@ function renderKdList(x) {
   if ($('kdMore')) $('kdMore').onclick = function () { KD.more = (KD.more || 0) + 30; renderKdList(kdCompute()); };
   if ($('kdLess')) $('kdLess').onclick = function () { KD.more = 0; renderKdList(kdCompute()); };
 }
+// วันเวลาแบบสั้น 'yyyy-MM-dd HH:mm' → '17 พ.ย. 09:29'
+function kdWhen(at) { return String(fmtWhen(String(at || '').slice(0, 16))).replace(/ \d{2} · /, ' '); }
+// ความเคลื่อนไหว Kingdee ล่าสุดของ รหัส(+Lot) ที่ช่องนี้
+function kdLastMove(loc, part, lot) {
+  for (var i = 0; i < KDM.moves.length; i++) {
+    var m = KDM.moves[i];
+    if ((m[4] === loc || m[5] === loc) && m[2] === part && (KD.mode !== 'lot' || m[3] === lot)) return m;
+  }
+  return null;
+}
 // Spec ของรหัส (Kingdee ก่อน → BOM)
 function kdSpecOf(part) {
   if (!kdSpecOf.map || kdSpecOf.n !== KD.rows.length) {
@@ -3363,11 +3374,16 @@ function kdTableHtml(b, compact) {
       var info = bomInfo(y.part) || {}, name = (y.k && y.k.name) || info.name || '';
       var diff = y.k && y.a && !y.a.noQty && !y.unitBad ? y.a.q - y.k.q : null;
       var ico = y.eq ? '✅' : !y.a ? (b.st === 'todo' ? '○' : '❌') : !y.k ? '➕' : '⚠';
+      var km = kdLastMove(b.loc, y.part, y.lot);
       return '<tr class="' + (y.eq ? 'ok' : 'bad') + '"><td><span class="kd-ico">' + ico + '</span><b>' + esc(y.part) + '</b>' + (y.lot ? '<br><span class="small">Lot ' + esc(y.lot) + '</span>' : '') +
           (name && !compact ? '<br><span class="small muted">' + esc(name) + '</span>' : '') +
           (kdSpecOf(y.part) ? '<br>' + kdSpecHtml(y.part) : '') + '</td>' +
-        '<td class="num">' + (y.k ? kdFmt(y.k.q) + ' <span class="small muted">' + esc(y.k.unit) + '</span>' : '—') + '</td>' +
-        '<td class="num">' + (y.a ? (y.a.noQty ? '<span class="small">ไม่ระบุจำนวน</span>' : kdFmt(y.a.q)) + ' <span class="small muted">' + esc(y.a.unit) + '</span><br><span class="small muted">' + y.a.n + ' กล่อง' + (y.a.pending ? ' · รอส่ง ' + y.a.pending : '') + '</span>' : '—') + '</td>' +
+        '<td class="num">' + (y.k ? kdFmt(y.k.q) + ' <span class="small muted">' + esc(y.k.unit) + '</span>' : '—') +
+          (km ? '<br><span class="kd-when">' + (km[1] === 'out' || (km[1] === 'move' && km[4] === b.loc) ? 'ออก ' : 'เข้า ') + esc(kdWhen(km[0])) + '</span>'
+            : y.k ? '<br><span class="kd-when muted">ยอด ณ ' + esc(kdWhen(kdSnapText())) + '</span>' : '') + '</td>' +
+        '<td class="num">' + (y.a ? (y.a.noQty ? '<span class="small">ไม่ระบุจำนวน</span>' : kdFmt(y.a.q)) + ' <span class="small muted">' + esc(y.a.unit) + '</span><br><span class="small muted">' + y.a.n + ' กล่อง' + (y.a.pending ? ' · รอส่ง ' + y.a.pending : '') + '</span>' +
+          (y.a.at ? '<br><span class="kd-when">' + (y.a.at0 && y.a.at0.slice(0, 10) !== y.a.at.slice(0, 10) ? esc(kdWhen(y.a.at0)) + ' – ' : '') + esc(kdWhen(y.a.at)) + '</span>' +
+            (y.a.by && !compact ? '<br><span class="small muted">' + esc(y.a.by) + '</span>' : '') : '') : '—') + '</td>' +
         (compact ? '' : '<td class="num">' + (y.unitBad ? '<span class="small">หน่วยต่างกัน</span>' : diff == null ? (y.k && !y.a ? '−' + kdFmt(y.k.q) : y.a && !y.k ? '+' + kdFmt(y.a.q) : '') : diff ? (diff > 0 ? '+' : '') + kdFmt(diff) : '0') + '</td>') +
       '</tr>';
     }).join('') + '</tbody></table>';
