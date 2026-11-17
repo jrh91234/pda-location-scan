@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261117-1853'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261117-1938'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -3578,6 +3578,7 @@ function renderKdMoves() {
       (list.length > lim ? '<button type="button" class="btn small" id="kdmMore">ดูเพิ่ม (อีก ' + (list.length - lim) + ')</button>' : '') +
       (KDM.more ? ' <button type="button" class="btn small" id="kdmLess">ย่อ</button>' : '')
       : '<div class="muted small center pad">' + (bd0 && KDM.rmKey !== bd0.key ? '⏳ กำลังโหลด…' : 'ไม่มีความเคลื่อนไหวในช่วงนี้') + '</div>') +
+    kdmDailyHtml(list) +
     (list.length && KDM.range !== 'all' ? '<div class="small muted">ช่องที่มีความเคลื่อนไหวในช่วงนี้มีกรอบส้มประบนผัง' + (KDM.trail ? ' · ลูกศร = 10 รายการล่าสุดของช่วงนี้' : '') + '</div>' : '') +
     (KDM.appOnly.length ? '<details class="kdm-apponly"><summary>📱 แอปย้ายแล้ว แต่ Kingdee ยังไม่ทำรายการ (วันนี้ ' + KDM.appOnly.length + ')</summary>' +
       KDM.appOnly.slice(0, 50).map(function (a) {
@@ -3607,7 +3608,72 @@ function renderKdMoves() {
     b.onclick = function () { var loc = b.getAttribute('data-kdmloc'); mapGotoCell(loc); setTimeout(function () { openKdCell(loc); }, 350); };
   });
   if ($('kdmMore')) $('kdmMore').onclick = function () { KDM.more += 30; renderKdMoves(); };
+  if ($('kdmDaily')) $('kdmDaily').addEventListener('toggle', function () { store('pda_kdm_daily', this.open ? '1' : '0'); el._html = ''; });
+  if ($('kdmMin')) $('kdmMin').onchange = function () { var v = Number(this.value); if (v > 0) { KDM.min = v; store('pda_kdm_min', v); renderKdMoves(); } };
+  if ($('kdmXlsx')) $('kdmXlsx').onclick = exportKdmDaily;
   if ($('kdmLess')) $('kdmLess').onclick = function () { KDM.more = 0; renderKdMoves(); };
+}
+// สรุปรายวัน: เข้า / ออก / ย้าย + จำนวนเที่ยวโฟล์คลิฟท์ (ประมาณ) + เวลาที่ใช้
+// เที่ยว = รายการประเภทเดียวกัน ช่องเดียวกัน ในรอบตรวจเดียวกัน (10 นาที) นับเป็น 1 เที่ยว
+KDM.min = Number(store('pda_kdm_min')) || 3;
+function kdmDaily(list) {
+  var days = {};
+  list.forEach(function (m) {
+    var d = workShiftDate(m[0]), e = days[d] || (days[d] = { d: d, in: 0, out: 0, move: 0, trips: {}, hours: {}, qin: 0, qout: 0 });
+    e[m[1]] = (e[m[1]] || 0) + 1;
+    if (m[1] === 'in') e.qin += m[6]; else if (m[1] === 'out') e.qout += m[6];
+    e.trips[m[0] + '|' + m[1] + '|' + (m[1] === 'in' ? m[5] : m[4])] = 1;
+    var h = String(m[0]).slice(11, 13); e.hours[h] = (e.hours[h] || 0) + 1;
+  });
+  return Object.keys(days).sort().reverse().map(function (k) {
+    var e = days[k]; e.n = e.in + e.out + e.move; e.nTrips = Object.keys(e.trips).length; e.mins = e.nTrips * KDM.min;
+    e.peak = Object.keys(e.hours).sort(function (a, b) { return e.hours[b] - e.hours[a]; })[0] || '';
+    return e;
+  });
+}
+function kdmMinText(m) { m = Math.round(m); return m >= 60 ? Math.floor(m / 60) + ' ชม. ' + (m % 60) + ' นาที' : m + ' นาที'; }
+function kdmDayText(d) { return String(fmtWhen(d + ' 00:00')).replace(/ · 00:00$/, ''); }
+function kdmDailyHtml(list) {
+  if (!list.length) return '';
+  var rows = kdmDaily(list), t = { in: 0, out: 0, move: 0, nTrips: 0, mins: 0 };
+  rows.forEach(function (e) { t.in += e.in; t.out += e.out; t.move += e.move; t.nTrips += e.nTrips; t.mins += e.mins; });
+  return '<details class="kdm-daily"' + (store('pda_kdm_daily') === '1' ? ' open' : '') + ' id="kdmDaily"><summary>📊 สรุปรายวัน · เวลาโฟล์คลิฟท์ ≈ <b>' + kdmMinText(t.mins) + '</b>' + (rows.length > 1 ? ' (' + rows.length + ' วัน)' : '') + '</summary>' +
+    '<div class="kdm-minrow small">เวลาต่อเที่ยว <input type="number" id="kdmMin" class="field" min="0.5" max="60" step="0.5" value="' + KDM.min + '"> นาที' +
+      ' <button type="button" class="btn small" id="kdmXlsx">⬇ Excel</button></div>' +
+    '<div class="kd-scroll"><table class="kd-table kdm-dtable"><thead><tr><th>วันทำงาน</th><th class="num">🟢 เข้า</th><th class="num">🔴 ออก</th><th class="num">🟠 ย้าย</th><th class="num">เที่ยว*</th><th class="num">เวลา</th><th class="num">ชม.ยุ่งสุด</th></tr></thead><tbody>' +
+    rows.map(function (e) {
+      return '<tr><td>' + esc(kdmDayText(e.d)) + '</td><td class="num">' + e.in + '</td><td class="num">' + e.out + '</td><td class="num">' + e.move + '</td>' +
+        '<td class="num"><b>' + e.nTrips + '</b></td><td class="num">' + kdmMinText(e.mins) + '</td><td class="num">' + (e.peak ? e.peak + ':00 (' + e.hours[e.peak] + ')' : '') + '</td></tr>';
+    }).join('') +
+    (rows.length > 1 ? '<tr class="kdm-total"><td>รวม</td><td class="num">' + t.in + '</td><td class="num">' + t.out + '</td><td class="num">' + t.move + '</td><td class="num"><b>' + t.nTrips + '</b></td><td class="num">' + kdmMinText(t.mins) + '</td><td class="num">เฉลี่ย ' + kdmMinText(t.mins / rows.length) + '/วัน</td></tr>' : '') +
+    '</tbody></table></div>' +
+    '<div class="small muted">* เที่ยว = รายการแบบเดียวกัน (เข้า/ออก/ย้าย) ที่ช่องเดียวกันในรอบตรวจเดียวกัน (ทุก 10 นาที) นับเป็น 1 เที่ยว · นับจากยอด Kingdee ที่เปลี่ยน เฉพาะช่องในผัง (ไม่รวม Public area) · เวลา = เที่ยว × เวลาต่อเที่ยว' +
+      (KDM.range === 'all' ? ' · "ล่าสุดทั้งหมด" ดึงมาแค่ 800 รายการล่าสุด — เลือก 7 วัน / เลือกวัน เพื่อข้อมูลครบ' : '') + '</div></details>';
+}
+function exportKdmDaily() {
+  var list = kdmFiltered(); if (!list.length) { toast('ไม่มีข้อมูลในช่วงนี้'); return; }
+  loadScriptOnce(XLSX_URL).then(function () {
+    var rows = kdmDaily(list).slice().reverse();
+    var wb = XLSX.utils.book_new();
+    var s1 = rows.map(function (e) {
+      return { 'วันทำงาน': e.d, 'เข้า (รายการ)': e.in, 'ออก (รายการ)': e.out, 'ย้าย (รายการ)': e.move, 'รวมรายการ': e.n, 'เที่ยว (ประมาณ)': e.nTrips,
+        'นาทีต่อเที่ยว': KDM.min, 'เวลาโฟล์คลิฟท์ (นาที)': e.mins, 'เวลาโฟล์คลิฟท์ (ชม.)': Math.round(e.mins / 6) / 10, 'ชั่วโมงที่ยุ่งสุด': e.peak ? e.peak + ':00' : '', 'รายการในชั่วโมงนั้น': e.peak ? e.hours[e.peak] : 0 };
+    });
+    var ws1 = XLSX.utils.json_to_sheet(s1); ws1['!cols'] = [12, 12, 12, 12, 11, 14, 12, 18, 16, 14, 16].map(function (w) { return { wch: w }; });
+    XLSX.utils.book_append_sheet(wb, ws1, 'สรุปรายวัน');
+    // ตามชั่วโมง
+    var hrs = {}; list.forEach(function (m) { var k = workShiftDate(m[0]) + '|' + String(m[0]).slice(11, 13); hrs[k] = (hrs[k] || 0) + 1; });
+    var ws3 = XLSX.utils.json_to_sheet(Object.keys(hrs).sort().map(function (k) { var a = k.split('|'); return { 'วันทำงาน': a[0], 'ชั่วโมง': a[1] + ':00', 'รายการ': hrs[k] }; }));
+    XLSX.utils.book_append_sheet(wb, ws3, 'ตามชั่วโมง');
+    var ws2 = XLSX.utils.json_to_sheet(list.slice().reverse().map(function (m) {
+      return { 'เวลา': m[0], 'วันทำงาน': workShiftDate(m[0]), 'ประเภท': (KDM_TYPE[m[1]] || ['', m[1]])[1], 'รหัส': m[2], 'Lot': m[3], 'จากช่อง': m[4], 'ไปช่อง': m[5], 'จำนวน': m[6], 'หน่วย': m[7], 'ชื่อ': m[8], 'Spec': kdSpecOf(m[2]),
+        'ในแอป': m[9] === 'ok' ? 'สแกนแล้ว' : m[9] === 'kd_only' ? 'ไม่ได้สแกน' : '' };
+    }));
+    ws2['!cols'] = [19, 11, 7, 14, 12, 12, 12, 10, 6, 30, 16, 10].map(function (w) { return { wch: w }; });
+    XLSX.utils.book_append_sheet(wb, ws2, 'รายการ');
+    var bd = kdmBounds(), tag = bd ? bd.from + (bd.to !== bd.from ? '_' + bd.to : '') : workDay();
+    XLSX.writeFile(wb, 'Kingdee-เข้าออก-' + tag + '.xlsx');
+  }, function (err) { toast('โหลดตัวสร้าง Excel ไม่ได้: ' + err.message, 3000); });
 }
 // ลูกศรบนผัง Kingdee: 10 ความเคลื่อนไหวล่าสุด (รูปแบบเดียวกับผังสแกน)
 function kdTrailActions() {

@@ -568,3 +568,9 @@ main.view-kd > .map-top, .map-top.tall { position: static; }
 .cnt-done { text-align: center; padding: 12px 0; }
 .cnt-done .cnt-num b { font-size: 56px; }
 .cnt-done .small { margin-top: 6px; }
+.kdm-daily { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 6px; }
+.kdm-daily summary { cursor: pointer; font-weight: 600; font-size: 14px; }
+.kdm-minrow { display: flex; align-items: center; gap: 6px; margin: 6px 0; flex-wrap: wrap; }
+.kdm-minrow .field { width: 70px; margin: 0; padding: 4px 6px; min-height: 0; }
+.kdm-dtable td, .kdm-dtable th { white-space: nowrap; }
+.kdm-total td { font-weight: 700; background: #f2f4f7; }
