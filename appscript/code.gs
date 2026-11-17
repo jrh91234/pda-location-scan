@@ -884,7 +884,7 @@ function kdDiff_(prev, cur) {
 function getKingdeeMoves(opt) {
   opt = opt || {};
   const props = PropertiesService.getScriptProperties();
-  const since = clean_(opt.since, 19), loc = clean_(opt.loc, 30), limit = Math.min(Number(opt.limit) || 300, 2000);
+  const since = clean_(opt.since, 19), until = clean_(opt.until, 19), loc = clean_(opt.loc, 30), limit = Math.min(Number(opt.limit) || 300, 3000);
   const out = [];
   const sh = book_().getSheetByName(KD_MOVE_SHEET);
   if (sh && sh.getLastRow() > 1) {
@@ -892,6 +892,7 @@ function getKingdeeMoves(opt) {
     for (let i = vals.length - 1; i >= 0 && out.length < limit; i--) {
       const r = vals[i], at = fmt_(r[0]);
       if (since && at < since) break;
+      if (until && at >= until) continue;
       if (loc && String(r[4]) !== loc && String(r[5]) !== loc) continue;
       out.push([at, String(r[1]), String(r[2]), String(r[3]), String(r[4]), String(r[5]), Number(r[6]) || 0, String(r[7]), String(r[8])]);
     }

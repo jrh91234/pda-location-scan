@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261117-1058'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261117-1202'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -3251,7 +3251,7 @@ function kdTopHtml() {
     '<div id="kdFind"></div>' +
     '<div class="map-legend small">' + Object.keys(KD_ST).map(function (k) {
       return '<span title="' + esc(KD_ST[k][2]) + '"><i class="lg kd-' + k + '"></i>' + KD_ST[k][1] + '</span>';
-    }).join('') + '<span><i class="lg kd-done-lg">✔</i>กดนับเสร็จแล้ว</span><span><i class="lg kd-moved-lg"></i>Kingdee เปลี่ยนรอบล่าสุด</span></div>' +
+    }).join('') + '<span><i class="lg kd-done-lg">✔</i>กดนับเสร็จแล้ว</span><span><i class="lg kd-moved-lg"></i>Kingdee เปลี่ยน (ช่วงที่เลือก)</span></div>' +
     '<div id="kdList"></div><div id="kdMoves"></div>';
 }
 function bindKdTop() {
@@ -3468,7 +3468,32 @@ function exportKdDiff() {
 // ===== ความเคลื่อนไหว Kingdee (เซิร์ฟเวอร์เทียบยอดทุก 10 นาที → ชีต KingdeeMoves) =====
 // moves: [at, type(in|out|move), part, lot, from, to, qty, unit, name, match(ok|kd_only)]
 var KDM = { moves: storeJson('pda_kdm') || [], appOnly: [], lastPoll: '', snapAt: '', err: '', loadedAt: 0, loading: false,
-  range: store('pda_kdm_range') || 'today', more: 0, trail: store('pda_kdm_trail') !== '0' };
+  range: store('pda_kdm_range') || 'today', more: 0, trail: store('pda_kdm_trail') !== '0',
+  from: store('pda_kdm_from') || '', to: store('pda_kdm_to') || '', rm: [], rmKey: '', rmLoading: false, rmErr: '' };
+var KDM_RANGES = [['hour', '1 ชม.'], ['today', 'วันนี้'], ['yday', 'เมื่อวาน'], ['7d', '7 วัน'], ['custom', '📅 เลือกวัน'], ['all', 'ล่าสุดทั้งหมด']];
+function kdmAddDay(d, n) { var t = new Date(Date.parse(d + 'T00:00:00Z') + n * 86400000); return t.toISOString().slice(0, 10); }
+// ช่วงที่ต้องถามเซิร์ฟเวอร์ (วันทำงาน 08:00 → 08:00 วันถัดไป) · null = ใช้ข้อมูลล่าสุดที่โหลดไว้
+function kdmBounds() {
+  var r = KDM.range, today = workDay(), a, b;
+  if (r === 'yday') { a = b = kdmAddDay(today, -1); }
+  else if (r === '7d') { a = kdmAddDay(today, -6); b = today; }
+  else if (r === 'custom') { a = KDM.from || today; b = KDM.to || a; if (b < a) { var x = a; a = b; b = x; } }
+  else return null;
+  return { from: a, to: b, since: a + ' 08:00:00', until: kdmAddDay(b, 1) + ' 08:00:00', key: a + '|' + b };
+}
+function loadKdRange(force) {
+  var bd = kdmBounds(); if (!bd || !apiUrl()) return;
+  if (!force && (KDM.rmKey === bd.key || KDM.rmLoading === bd.key)) return;
+  KDM.rmLoading = bd.key; KDM.rmErr = '';
+  api('getKingdeeMoves', { since: bd.since, until: bd.until, limit: 3000 }).then(function (d) {
+    if (KDM.rmLoading !== bd.key) return;
+    KDM.rmLoading = false; KDM.rm = d.moves || []; KDM.rmKey = bd.key; KDM.rmAt = Date.now();
+    if (S.view === 'kd') { renderKdMoves(); if (MAP.data) renderMapGrid(); }
+  }, function (err) {
+    if (KDM.rmLoading !== bd.key) return;
+    KDM.rmLoading = false; KDM.rmErr = err.message; if (S.view === 'kd') renderKdMoves();
+  });
+}
 var KDM_TYPE = { in: ['🟢', 'เข้า'], out: ['🔴', 'ออก'], move: ['🟠', 'ย้าย'] };
 MAP_EV.kd_in = '🟢 เข้า (Kingdee)'; MAP_EV.kd_out = '🔴 ออก (Kingdee)';
 function loadKdMoves() {
@@ -3485,15 +3510,28 @@ function loadKdMoves() {
     if (S.view === 'kd') renderKdMoves();
   });
 }
-setInterval(function () { if (S.view === 'kd' && document.visibilityState !== 'hidden' && Date.now() - KDM.loadedAt > 60000) loadKdMoves(); }, 15000);
+setInterval(function () {
+  if (S.view !== 'kd' || document.visibilityState === 'hidden') return;
+  if (Date.now() - KDM.loadedAt > 60000) loadKdMoves();
+  var bd = kdmBounds(); if (bd && bd.to >= workDay() && Date.now() - (KDM.rmAt || 0) > 60000) loadKdRange(true);
+}, 15000);
 function kdmLatestSet() {
-  var s = {}, t = KDM.moves[0] && KDM.moves[0][0];
+  var s = {};
+  if (KDM.range !== 'all') {
+    kdmFiltered().forEach(function (m) { if (m[4]) s[m[4]] = 1; if (m[5]) s[m[5]] = 1; });
+    return s;
+  }
+  var t = KDM.moves[0] && KDM.moves[0][0];
   if (!t || Date.now() - bkkMs(t) > 3 * 3600000) return s; // รอบล่าสุดเก่ากว่า 3 ชม. ไม่ต้องไฮไลต์
   KDM.moves.forEach(function (m) { if (m[0] === t) { if (m[4]) s[m[4]] = 1; if (m[5]) s[m[5]] = 1; } });
   return s;
 }
 function kdmFiltered() {
-  var r = KDM.range, now = Date.now(), today = workDay();
+  var r = KDM.range, now = Date.now(), today = workDay(), bd = kdmBounds();
+  if (bd) {
+    if (KDM.rmKey !== bd.key) { loadKdRange(); return []; }
+    return KDM.rm.filter(function (m) { return m[0] >= bd.since && m[0] < bd.until; });
+  }
   return KDM.moves.filter(function (m) {
     if (r === 'hour') return now - bkkMs(m[0]) <= 3600000;
     if (r === 'today') return workShiftDate(m[0]) === today;
@@ -3520,21 +3558,26 @@ function kdmRowHtml(m, showLoc) {
 }
 function renderKdMoves() {
   var el = $('kdMoves'); if (!el) return;
-  var list = kdmFiltered(), lim = (mapWide() ? 30 : 5) + KDM.more, n = { in: 0, out: 0, move: 0, flag: 0 };
+  var list = kdmFiltered(), bd0 = kdmBounds(), lim = (mapWide() ? 30 : 5) + KDM.more, n = { in: 0, out: 0, move: 0, flag: 0 };
   list.forEach(function (m) { n[m[1]] = (n[m[1]] || 0) + 1; if (m[9] === 'kd_only') n.flag++; });
   var status = !KDM.lastPoll && !KDM.moves.length
     ? '<div class="msg warn small">ยังไม่ได้เปิดตัวดึงความเคลื่อนไหว — ต้องกดอนุญาตใน Apps Script ครั้งแรก (ฟังก์ชัน <b>setupKingdeeTrigger</b>)</div>'
     : '<div class="muted small">เทียบยอด Kingdee ทุก 10 นาที · รอบล่าสุด ' + esc(fmtWhen(KDM.snapAt)) + (KDM.lastPoll ? ' · เช็คล่าสุด ' + esc(agoText(KDM.lastPoll)) : '') +
       (KDM.err ? '<br><span class="err-text">⚠ ' + esc(KDM.err) + '</span>' : '') + '</div>';
   var html = '<div class="find-box kdm-box"><div class="kdm-head"><b>📈 ความเคลื่อนไหว Kingdee</b>' +
-      '<span class="seg">' + [['hour', '1 ชม.'], ['today', 'วันนี้'], ['all', 'ทั้งหมด']].map(function (r) {
-        return '<button type="button" data-kdmr="' + r[0] + '" class="' + (KDM.range === r[0] ? 'active' : '') + '">' + r[1] + '</button>';
-      }).join('') + '</span></div>' + status +
+      '</div><div class="kdm-ranges">' + KDM_RANGES.map(function (r) {
+        return '<button type="button" data-kdmr="' + r[0] + '" class="find-zone' + (KDM.range === r[0] ? ' on' : '') + '">' + r[1] + '</button>';
+      }).join('') + '</div>' +
+      (KDM.range === 'custom' ? '<div class="kdm-dates"><label>ตั้งแต่ <input type="date" id="kdmFrom" class="field" value="' + esc(bd0 ? bd0.from : '') + '" max="' + workDay() + '"></label>' +
+        '<label>ถึง <input type="date" id="kdmTo" class="field" value="' + esc(bd0 ? bd0.to : '') + '" max="' + workDay() + '"></label></div>' : '') +
+      (bd0 ? '<div class="small kdm-rangeinfo">📅 ' + esc(fmtWhen(bd0.since)) + ' → ' + esc(fmtWhen(bd0.until)) + ' <span class="muted">(วันทำงานเริ่ม 08:00)</span>' +
+        (KDM.rmLoading ? ' · ⏳ กำลังโหลด…' : '') + (KDM.rmErr ? ' <span class="err-text">⚠ ' + esc(KDM.rmErr) + '</span>' : '') + '</div>' : '') + status +
     (list.length ? '<div class="small kdm-sum">🟢 เข้า ' + n.in + ' · 🔴 ออก ' + n.out + ' · 🟠 ย้าย ' + n.move + (n.flag ? ' · <span class="kdm-flag">ไม่ได้สแกน ' + n.flag + '</span>' : '') + '</div>' +
       '<div class="find-list">' + list.slice(0, lim).map(function (m) { return kdmRowHtml(m); }).join('') + '</div>' +
       (list.length > lim ? '<button type="button" class="btn small" id="kdmMore">ดูเพิ่ม (อีก ' + (list.length - lim) + ')</button>' : '') +
       (KDM.more ? ' <button type="button" class="btn small" id="kdmLess">ย่อ</button>' : '')
-      : '<div class="muted small center pad">ไม่มีความเคลื่อนไหวในช่วงนี้</div>') +
+      : '<div class="muted small center pad">' + (bd0 && KDM.rmKey !== bd0.key ? '⏳ กำลังโหลด…' : 'ไม่มีความเคลื่อนไหวในช่วงนี้') + '</div>') +
+    (list.length && KDM.range !== 'all' ? '<div class="small muted">ช่องที่มีความเคลื่อนไหวในช่วงนี้มีกรอบส้มประบนผัง' + (KDM.trail ? ' · ลูกศร = 10 รายการล่าสุดของช่วงนี้' : '') + '</div>' : '') +
     (KDM.appOnly.length ? '<details class="kdm-apponly"><summary>📱 แอปย้ายแล้ว แต่ Kingdee ยังไม่ทำรายการ (วันนี้ ' + KDM.appOnly.length + ')</summary>' +
       KDM.appOnly.slice(0, 50).map(function (a) {
         return '<div class="small kdm-ao"><span class="loc-pill">' + esc(a[2]) + '</span> → <span class="loc-pill">' + esc(a[3]) + '</span> ' + esc(a[1]) + ' · ' + esc(a[4]) + ' · ' + esc(fmtWhen(a[0])) + '</div>';
@@ -3543,7 +3586,21 @@ function renderKdMoves() {
   if (el._html === html) return;
   el._html = html; el.innerHTML = html;
   Array.prototype.forEach.call(el.querySelectorAll('[data-kdmr]'), function (b) {
-    b.onclick = function () { KDM.range = b.getAttribute('data-kdmr'); store('pda_kdm_range', KDM.range); KDM.more = 0; renderKdMoves(); };
+    b.onclick = function () {
+      KDM.range = b.getAttribute('data-kdmr'); store('pda_kdm_range', KDM.range); KDM.more = 0;
+      if (KDM.range === 'custom' && !KDM.from) { KDM.from = KDM.to = workDay(); }
+      renderKdMoves(); if (MAP.data) renderMapGrid();
+    };
+  });
+  ['kdmFrom', 'kdmTo'].forEach(function (id) {
+    if (!$(id)) return;
+    $(id).onchange = function () {
+      if (!this.value) return;
+      if (id === 'kdmFrom') { KDM.from = this.value; if (!KDM.to || KDM.to < KDM.from) KDM.to = KDM.from; }
+      else { KDM.to = this.value; if (!KDM.from || KDM.from > KDM.to) KDM.from = KDM.to; }
+      store('pda_kdm_from', KDM.from); store('pda_kdm_to', KDM.to); KDM.more = 0;
+      renderKdMoves(); if (MAP.data) renderMapGrid();
+    };
   });
   Array.prototype.forEach.call(el.querySelectorAll('[data-kdmloc]'), function (b) {
     b.onclick = function () { var loc = b.getAttribute('data-kdmloc'); mapGotoCell(loc); setTimeout(function () { openKdCell(loc); }, 350); };
@@ -3554,7 +3611,7 @@ function renderKdMoves() {
 // ลูกศรบนผัง Kingdee: 10 ความเคลื่อนไหวล่าสุด (รูปแบบเดียวกับผังสแกน)
 function kdTrailActions() {
   var out = [];
-  KDM.moves.forEach(function (m) {
+  (KDM.range === 'all' ? KDM.moves : kdmFiltered()).forEach(function (m) {
     if (out.length > TRAIL_N) return;
     var ev = m[1] === 'move' ? 'move' : m[1] === 'in' ? 'kd_in' : 'kd_out', loc = m[5] || m[4], last = out[out.length - 1];
     if (last && last.loc === loc && ev !== 'move' && last.ev !== 'move') { last.n++; return; }
