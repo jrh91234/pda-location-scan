@@ -530,3 +530,8 @@ main.view-kd > .map-top, .map-top.tall { position: static; }
 .cell.kdf-hit2 { z-index: 2; outline: 3px solid #f97316; outline-offset: 0; }
 #kdFind .find-list { max-height: none; }
 @media (min-width: 1000px) { #kdFind .find-list { max-height: 260px; } }
+.kdf-pkg { margin: 4px 0 6px; padding: 6px 8px; background: #eff8ff; border-radius: 8px; font-size: 14px; }
+.kdf-pkg-res { margin-top: 3px; }
+.kdf-pkg-none { color: #b54708; margin-top: 3px; }
+.cell.kdf-pkg-cell { z-index: 3; box-shadow: 0 0 0 3px #fff, 0 0 0 6px #2563eb; }
+.cell.kdf-pkg-cell::after { content: '📦'; position: absolute; top: -10px; right: -8px; font-size: 12px; }
