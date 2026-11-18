@@ -592,3 +592,15 @@ main.view-kd > .map-top, .map-top.tall { position: static; }
 .kdf-here { margin-top: 4px; font-size: 15px; }
 .kdf-here-t { font-weight: 700; color: #1d4ed8; }
 .loc-pill.kdf-big { font-size: 20px; padding: 4px 12px; font-weight: 700; }
+.kdp { margin: 6px 0; padding: 6px 10px; background: #f5f3ff; border: 1px solid #d9d6fe; border-radius: 8px; }
+.kdp summary { cursor: pointer; }
+.kdp-chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
+.kdp-bar { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
+.kdp-bar .field { flex: 1; margin: 0; }
+.kdp-list { max-height: 420px; overflow-y: auto; }
+.kdp-row { display: flex; justify-content: space-between; gap: 8px; padding: 5px 0; border-bottom: 1px solid #ebe9fe; font-size: 14px; }
+.kdp-main { min-width: 0; }
+.kdp-q { text-align: right; white-space: nowrap; display: flex; flex-direction: column; }
+.kdf-pub { margin-top: 6px; padding: 6px 8px; background: #f5f3ff; border-radius: 8px; }
+.kdp-chips .kda-chip { background: #fff; border-color: #d0d5dd; color: #344054; padding: 3px 8px; font-size: 13px; cursor: pointer; }
+.kdp-chips .kda-chip.on { background: #6941c6; border-color: #6941c6; color: #fff; }
