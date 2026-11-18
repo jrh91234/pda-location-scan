@@ -16,7 +16,7 @@ const TZ = 'Asia/Bangkok';
 const MAX_BATCH = 50;
 
 // ======================= Web App =======================
-const API_ACTIONS = { ping: ping, saveScans: saveScans, listScans: listScans, deleteScan: deleteScan, updateQty: updateQty, updateLocation: updateLocation, findByQr: findByQr, findSamePkg: findSamePkg, getScans: getScans, getTimeline: getTimeline, getPartPackages: getPartPackages, getLocationMap: getLocationMap, getLocationEvents: getLocationEvents,
+const API_ACTIONS = { ping: ping, saveScans: saveScans, listScans: listScans, deleteScan: deleteScan, updateQty: updateQty, updateLocation: updateLocation, findByQr: findByQr, findSamePkg: findSamePkg, findPackage: findPackage, getScans: getScans, getTimeline: getTimeline, getPartPackages: getPartPackages, getLocationMap: getLocationMap, getLocationEvents: getLocationEvents,
   uploadPhoto: uploadPhoto, getPhoto: getPhoto, deletePhoto: deletePhoto,
   getCountState: getCountState, setCountRound: setCountRound, markBinCounted: markBinCounted, getKingdeeMoves: getKingdeeMoves, getBinAges: getBinAges,
   getCountProfile: getCountProfile, saveCountProfile: saveCountProfile, saveCountSample: saveCountSample };
@@ -379,6 +379,24 @@ function findSamePkg(part, lot, pkg, qr) {
     return String(r.status) !== 'deleted' && String(r.part_code).toUpperCase() === part && String(r.lot_no) === lot &&
       pkgKey_(r.pkg_ref) === pk && String(r.qr_raw) !== qr;
   }).slice(-10).map(toClient_);
+}
+
+/**
+ * กล่องนี้อยู่ไหน: ป้ายใบเดียวกัน (QR ตรงทั้งใบ) หรือ รหัส + Lot + Package เดียวกัน — ล่าสุดก่อน, สูงสุด 10
+ * คืน [{...scan, exact:true|false}]
+ */
+function findPackage(qr, part, lot, pkg) {
+  const chk = checkQr_(clean_(qr, 500)), q = chk.text || '';
+  part = clean_(part, 80).toUpperCase(); lot = clean_(lot, 80); const pk = pkgKey_(clean_(pkg, 80));
+  if (!q && !(part && pk)) return [];
+  const out = [], rows = readAll_(sheet_());
+  for (let i = rows.length - 1; i >= 0 && out.length < 10; i--) {
+    const r = rows[i]; if (String(r.status) === 'deleted') continue;
+    const exact = !!q && String(r.qr_raw) === q;
+    const same = !!pk && String(r.part_code).toUpperCase() === part && String(r.lot_no) === lot && pkgKey_(r.pkg_ref) === pk;
+    if (exact || same) { const c = toClient_(r); c.exact = exact; out.push(c); }
+  }
+  return out;
 }
 
 /** ดึงสถานะล่าสุดของหลายรายการ (ให้หน้าสแกนในเครื่องตรงกับชีต: ลบ/ย้าย/แก้ยอดจากเครื่องอื่น) */

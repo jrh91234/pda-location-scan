@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261118-1631'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261118-1804'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -3436,7 +3436,7 @@ function kdCellHtml(code, x) {
   if (b && b.marked) cls += ' kd-done';
   if (x.moved && x.moved[code]) cls += ' kd-moved';
   if (KDF.hits && KDF.hits[code]) cls += KDF.hits[code] === 'lot' ? ' kdf-hit' : ' kdf-hit2';
-  if (KDF.pkgRec && KDF.pkgState === 'found' && KDF.pkgRec.location === code) cls += ' kdf-pkg-cell';
+  if (KDF.pkgState === 'found' && KDF.pkgRecs.some(function (x) { return x.location === code; })) cls += ' kdf-pkg-cell';
   if (code === S.location) cls += ' cur';
   var txt = !b ? '' : b.st === 'todo' ? (b.nk > 1 ? b.nk : '') : b.st === 'diff' ? b.nd : b.st === 'extra' ? (b.na > 1 ? b.na : '') : '';
   if (KD.color === 'age') txt = ag ? ag.days : '';
@@ -3933,7 +3933,7 @@ function kdTrailActions() {
 
 // ===== หา "Kingdee บอกว่าอยู่ช่องไหน" จากการสแกนป้ายหน้างาน (กล้อง / ปืนสแกน / พิมพ์) =====
 // hits: { ช่อง: 'lot' (รหัส+Lot ตรง → กระพริบแดง) | 'part' (รหัสตรงแต่คนละ Lot → กรอบส้ม) }
-var KDF = { q: '', part: '', lot: '', parts: null, hits: null, list: [], appLocs: [], all: false, pkg: '', qty: '', unit: '', qr: '', pkgRec: null, pkgState: '' };
+var KDF = { q: '', part: '', lot: '', parts: null, hits: null, list: [], appLocs: [], all: false, pkg: '', qty: '', unit: '', qr: '', pkgRec: null, pkgRecs: [], pkgState: '' };
 // รหัสใน Kingdee ที่ รหัส / ชื่อ / Spec มีทุกคำที่พิมพ์ → [{ part, name, spec, bins, score }]
 function kdPartSearch(q, max) {
   var words = String(q || '').trim().toUpperCase().split(/\s+/).filter(String); if (!words.length) return [];
@@ -3957,7 +3957,7 @@ function kdfRun(raw, jump) {
   var loc = asLocation(text);
   if (loc) { KDF.q = ''; KDF.hits = null; KDF.list = []; renderKdFind(); if ($('kdfQ')) $('kdfQ').value = ''; mapGotoCell(loc); setTimeout(function () { openKdCell(loc); }, 400); return; }
   var p = parseQr(text), part = '', lot = '', parts = null;
-  KDF.pkg = ''; KDF.qty = ''; KDF.unit = ''; KDF.qr = ''; KDF.pkgRec = null; KDF.pkgState = '';
+  KDF.pkg = ''; KDF.qty = ''; KDF.unit = ''; KDF.qr = ''; KDF.pkgRec = null; KDF.pkgRecs = []; KDF.pkgState = '';
   if (p.format !== 'text' && p.part_code) {
     part = p.part_code.toUpperCase(); lot = p.lot_no;
     KDF.pkg = p.pkg_ref || ''; KDF.qty = p.qty; KDF.unit = p.unit || ''; KDF.qr = p.qr_raw;
@@ -4001,40 +4001,63 @@ function kdfRun(raw, jump) {
   renderKdFind();
   if (MAP.data) renderMapGrid();
   var first = KDF.list.filter(function (e) { return e.kind === 'lot'; })[0] || KDF.list[0];
-  if (jump !== false) {
-    if (first) { beep(true); mapGotoCell(first.loc); } else beep(false);
+  KDF.jump = jump !== false;
+  if (KDF.jump) {
+    if (KDF.pkgRec) { beep(true); mapGotoCell(KDF.pkgRec.location); KDF.jump = false; }
+    else if (first) { beep(true); mapGotoCell(first.loc); } else beep(false);
   }
 }
 // Package นี้ (QR เดียวกันทั้งใบ) แอปสแกนไว้ช่องไหน — ดูในเครื่องก่อน แล้วถามเซิร์ฟเวอร์
+// ตรงทั้งใบ หรือ รหัส + Lot + Package เดียวกัน (ป้ายพิมพ์ใหม่)
+function kdfPkgMatch(r) {
+  if (r.qr_raw === KDF.qr) return true;
+  return !!(pkgKey(KDF.pkg) && String(r.part_code || '').toUpperCase() === KDF.part && String(r.lot_no || '') === String(KDF.lot || '') && pkgKey(r.pkg_ref) === pkgKey(KDF.pkg));
+}
+function kdfSetPkg(list) {
+  var seen = {};
+  KDF.pkgRecs = list.filter(function (r) { if (!r.location || seen[r.location]) return false; seen[r.location] = 1; return true; });
+  KDF.pkgRec = KDF.pkgRecs[0] || null;
+}
 function kdfLookupPkg(qr) {
-  var loc = findSavedDuplicate(qr);
-  if (loc) { KDF.pkgRec = { location: loc.location, scanned_by: loc.scanned_by, scanned_at: loc.scanned_at, qty: loc.qty, unit: loc.unit, local: true }; KDF.pkgState = 'found'; }
-  else KDF.pkgState = 'loading';
-  if (!apiUrl()) { if (!loc) KDF.pkgState = 'offline'; return; }
-  api('findByQr', qr).then(function (rec) {
+  var local = S.recent.filter(function (r) { return r.location && (r.status === 'pending' || r.status === 'saved') && kdfPkgMatch(r); })
+    .map(function (r) { return { location: r.location, scanned_by: r.scanned_by, scanned_at: r.scanned_at, qty: r.qty, unit: r.unit, pkg_ref: r.pkg_ref, exact: r.qr_raw === qr, local: true }; });
+  kdfSetPkg(local);
+  KDF.pkgState = KDF.pkgRec ? 'found' : 'loading';
+  if (!apiUrl()) { if (!KDF.pkgRec) KDF.pkgState = 'offline'; return; }
+  api('findPackage', qr, KDF.part, KDF.lot, KDF.pkg).then(function (list) {
     if (KDF.qr !== qr) return;
-    if (rec) { KDF.pkgRec = rec; KDF.pkgState = 'found'; } else if (!loc) KDF.pkgState = 'none';
+    var had = KDF.pkgRec && KDF.pkgRec.location;
+    var pend = local.filter(function (l) { return !(list || []).some(function (r) { return r.location === l.location; }); });
+    kdfSetPkg(pend.concat(list || []));
+    KDF.pkgState = KDF.pkgRec ? 'found' : 'none';
     renderKdFind(); if (MAP.data) renderMapGrid();
-  }, function () { if (KDF.qr !== qr) return; if (!loc) KDF.pkgState = 'offline'; renderKdFind(); });
+    if (KDF.pkgRec && (KDF.jump || had !== KDF.pkgRec.location)) { KDF.jump = false; mapGotoCell(KDF.pkgRec.location); }
+  }, function () { if (KDF.qr !== qr) return; if (!KDF.pkgRec) KDF.pkgState = 'offline'; renderKdFind(); });
 }
 function kdfPkgHtml() {
   if (!KDF.qr) return '';
   var head = '<div class="kdf-pkg-line">📦 Package <b>' + (KDF.pkg ? esc(KDF.pkg) : '<span class="muted">ไม่มีบนป้าย</span>') + '</b>' +
     (KDF.qty !== '' ? ' · ป้ายนี้ <b>' + esc(fmtQty(KDF.qty, KDF.unit)) + '</b>' : '') + '</div>';
   var r = KDF.pkgRec, body;
-  if (KDF.pkgState === 'found' && r) {
-    var okK = KDF.hits && KDF.hits[r.location] === 'lot';
-    body = '<div class="kdf-pkg-res">📍 Package นี้แอปสแกนไว้ที่ <button type="button" class="loc-pill kdf-al" data-kdfc="' + esc(r.location) + '">' + esc(r.location) + '</button>' +
-      ' <span class="small muted">' + esc(r.scanned_by || '') + ' · ' + esc(fmtWhen(String(r.scanned_at || '').slice(0, 16))) + '</span> ' +
+  function where(x, big) {
+    var okK = KDF.hits && KDF.hits[x.location] === 'lot';
+    return '<div class="' + (big ? 'kdf-here' : 'kdf-pkg-res') + '">' + (big ? '<span class="kdf-here-t">📍 กล่องนี้อยู่ที่</span> ' : '') +
+      '<button type="button" class="loc-pill kdf-al' + (big ? ' kdf-big' : '') + '" data-kdfc="' + esc(x.location) + '">' + esc(x.location) + '</button>' +
+      ' <span class="small muted">สแกนโดย ' + esc(x.scanned_by || '-') + ' · ' + esc(fmtWhen(String(x.scanned_at || '').slice(0, 16))) +
+        (x.qty !== '' && x.qty != null ? ' · ' + esc(fmtQty(x.qty, x.unit)) : '') + (x.exact === false ? ' · ป้ายคนละใบ (Package เดียวกัน)' : '') + '</span> ' +
       (okK ? '<span class="kdm-ok">✓ ตรงกับ Kingdee</span>' : '<span class="kdm-flag">Kingdee ไม่ได้บอกว่าอยู่ช่องนี้</span>') + '</div>';
-  } else if (KDF.pkgState === 'loading') body = '<div class="small muted">⏳ กำลังหาว่า Package นี้สแกนไว้ช่องไหน…</div>';
-  else if (KDF.pkgState === 'none') body = '<div class="small kdf-pkg-none">Package นี้ยังไม่เคยสแกนเข้าแอป</div>';
-  else if (KDF.pkgState === 'offline') body = '<div class="small muted">ออฟไลน์ — เช็ค Package ในแอปไม่ได้</div>';
+  }
+  if (KDF.pkgState === 'found' && r) {
+    body = where(r, true) + (KDF.pkgRecs.length > 1 ? '<div class="small kdf-pkg-none">⚠ Package นี้ถูกสแกนไว้ ' + KDF.pkgRecs.length + ' ช่อง (อาจแบ่งกล่อง หรือสแกนซ้ำ):</div>' +
+      KDF.pkgRecs.slice(1).map(function (x) { return where(x, false); }).join('') : '');
+  } else if (KDF.pkgState === 'loading') body = '<div class="small muted">⏳ กำลังหาว่ากล่องนี้สแกนไว้ช่องไหน…</div>';
+  else if (KDF.pkgState === 'none') body = '<div class="small kdf-pkg-none">กล่องนี้ยังไม่เคยสแกนเข้าแอป — ดูได้แค่ช่องที่ Kingdee บอกว่ามี Lot นี้ (ด้านล่าง)</div>';
+  else if (KDF.pkgState === 'offline') body = '<div class="small muted">ออฟไลน์ — เช็คกล่องในแอปไม่ได้</div>';
   else body = '';
-  return '<div class="kdf-pkg">' + head + body + '</div>';
+  return '<div class="kdf-pkg' + (KDF.pkgState === 'found' ? ' kdf-pkg-found' : '') + '">' + head + body + '</div>';
 }
 function kdfClear() {
-  KDF.q = ''; KDF.hits = null; KDF.list = []; KDF.appLocs = []; KDF.qr = ''; KDF.parts = null; KDF.pkgRec = null; KDF.pkgState = '';
+  KDF.q = ''; KDF.hits = null; KDF.list = []; KDF.appLocs = []; KDF.qr = ''; KDF.parts = null; KDF.pkgRec = null; KDF.pkgRecs = []; KDF.pkgState = '';
   if ($('kdfQ')) $('kdfQ').value = '';
   renderKdFind(); if (MAP.data) renderMapGrid();
 }
@@ -4060,7 +4083,8 @@ function renderKdFind() {
     '<div class="kdm-head"><span>' + [KDF.part ? '<b>' + esc(KDF.part) + '</b>' : '', KDF.lot ? 'Lot <b>' + esc(KDF.lot) + '</b>' : '',
         KDF.parts ? '🔎 "<b>' + esc(KDF.q) + '</b>" เจอ <b>' + Object.keys(KDF.parts).length + '</b> รหัส' : ''].filter(String).join(' · ') + (name ? ' <span class="small muted">' + esc(name) + '</span>' : '') + (KDF.part && kdSpecOf(KDF.part) ? ' ' + kdSpecHtml(KDF.part) : '') + '</span>' +
       '<button type="button" class="btn small" id="kdfX">✕ ล้าง</button></div>' + kdfPkgHtml() +
-    (lots.length ? '<div class="small">📍 Kingdee บอกว่าอยู่ <b>' + lots.length + '</b> ช่อง (กระพริบแดงบนผัง)</div><div class="find-list">' + lots.slice(0, lim).map(row).join('') + '</div>' +
+    (lots.length && KDF.pkgRec ? '<details class="kdm-apponly"><summary>📍 Lot นี้ทั้งหมดใน Kingdee อยู่ ' + lots.length + ' ช่อง (กระพริบแดงบนผัง)</summary><div class="find-list">' + lots.map(row).join('') + '</div></details>'
+      : lots.length ? '<div class="small">📍 Kingdee บอกว่า Lot นี้อยู่ <b>' + lots.length + '</b> ช่อง (กระพริบแดงบนผัง)</div><div class="find-list">' + lots.slice(0, lim).map(row).join('') + '</div>' +
         (lots.length > lim ? '<button type="button" class="btn small" id="kdfMore">ดูทั้งหมด ' + lots.length + ' ช่อง</button>' : '')
       : '<div class="msg warn small">Kingdee ไม่มี' + (KDF.lot ? ' Lot นี้' : 'รหัส / ชื่อนี้') + 'ในช่องไหนเลย' + (others.length ? '' : ' (หรือยอดเป็น 0 / อยู่ Public area)') + '</div>') +
     (others.length ? '<details class="kdm-apponly"' + (lots.length ? '' : ' open') + '><summary>🔸 รหัสเดียวกัน คนละ Lot (' + others.length + ' ช่อง · กรอบส้มบนผัง)</summary><div class="find-list">' + others.slice(0, 40).map(row).join('') + '</div></details>' : '') +
