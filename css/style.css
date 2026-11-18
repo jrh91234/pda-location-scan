@@ -198,7 +198,7 @@ button.loc-pill { border: 1px solid var(--blue); font-family: inherit; font-size
 .eng-off { text-decoration: line-through; opacity: .6; }
 
 /* ---------- ผัง Location ---------- */
-.map-top { position: sticky; top: 92px; z-index: 3; background: var(--bg); padding: 8px 12px 4px; }
+.map-top { position: static; z-index: 3; background: var(--bg); padding: 8px 12px 4px; }
 .map-sum { margin-bottom: 2px; }
 .map-sum b { color: var(--ink); }
 .err-text { color: var(--red); }
