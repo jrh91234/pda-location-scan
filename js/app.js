@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261118-0754'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261118-0849'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -401,8 +401,8 @@ function camContinuous(raw) {
 }
 
 // รหัส + Lot + Package เดียวกัน แต่ QR ต่างกัน (ป้ายใหม่หลังแบ่งกล่อง / สแกนกล่องเดิมซ้ำด้วยป้ายใหม่)
-// ⏸ ปิดไว้ก่อน (ยังไม่ใช้งานจริง) — เปลี่ยนเป็น true เมื่อพร้อมเปิดกติกา Package ซ้ำ
-var PKG_RULE_ON = false;
+// กติกา Package ซ้ำ (เปิดใช้งาน) — false = ปิด
+var PKG_RULE_ON = true;
 function pkgKey(v) { return String(v == null ? '' : v).trim().toUpperCase().replace(/^0+(?=\w)/, ''); }
 function samePkgOf(a, b) {
   return !!(a && b && pkgKey(a.pkg_ref) && String(a.part_code || '').toUpperCase() === String(b.part_code || '').toUpperCase() &&
