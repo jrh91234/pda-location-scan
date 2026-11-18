@@ -587,3 +587,4 @@ main.view-kd > .map-top, .map-top.tall { position: static; }
 .kda-chip { display: inline-block; font-size: 12px; padding: 0 6px; border-radius: 6px; border: 1px solid; white-space: nowrap; }
 .kda-days { flex: none; min-width: 44px; text-align: center; font-weight: 700; font-size: 15px; border-radius: 8px; border: 1px solid; padding: 4px 2px; margin-right: 8px; line-height: 1.1; }
 .kda-days small { display: block; font-size: 10px; font-weight: 400; }
+.kd-stale { background: #fde8e8; border: 1px solid #f5a3a3; color: #8a1c1c; border-radius: 8px; padding: 6px 10px; margin: 6px 0; }

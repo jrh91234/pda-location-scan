@@ -820,6 +820,17 @@ function kingdeePoll() {
     const d = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
     const snapAt = d.snapshotAt ? fmt_(new Date(d.snapshotAt)) : fmt_(new Date());
     if (snapAt === props.getProperty('KD_SNAP_AT')) { props.deleteProperty('KD_POLL_ERR'); return { skipped: 'same snapshot', snapAt: snapAt }; }
+    // ตัวเลขเปลี่ยนจริงหรือไม่ (ไฟล์ต้นทางอาจถูกส่งซ้ำแค่เปลี่ยนเวลา) → จำเวลาที่ข้อมูลเปลี่ยนล่าสุด
+    const invText = text.slice(Math.max(0, text.indexOf('"inventory"')));
+    const hash = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, invText, Utilities.Charset.UTF_8));
+    if (hash !== props.getProperty('KD_DATA_HASH')) {
+      let since = snapAt;
+      if (!props.getProperty('KD_DATA_HASH')) { // ครั้งแรก: ใช้เวลาความเคลื่อนไหวล่าสุดที่เคยบันทึก
+        const mvSh = book_().getSheetByName(KD_MOVE_SHEET);
+        if (mvSh && mvSh.getLastRow() > 1) since = fmt_(mvSh.getRange(mvSh.getLastRow(), 1).getValue()) || snapAt;
+      }
+      props.setProperty('KD_DATA_HASH', hash); props.setProperty('KD_DATA_SINCE', since);
+    }
     // ยอดปัจจุบัน: รวมตาม ช่อง|รหัส|Lot
     const cur = {};
     (d.inventory || []).forEach(function (r) {
@@ -942,7 +953,7 @@ function getKingdeeMoves(opt) {
     });
     appOnly.reverse();
   }
-  return { moves: out, appOnly: appOnly.slice(0, 100), snapAt: props.getProperty('KD_SNAP_AT') || '', lastPoll: props.getProperty('KD_LAST_POLL') || '', err: props.getProperty('KD_POLL_ERR') || '' };
+  return { moves: out, appOnly: appOnly.slice(0, 100), snapAt: props.getProperty('KD_SNAP_AT') || '', dataSince: props.getProperty('KD_DATA_SINCE') || '', lastPoll: props.getProperty('KD_LAST_POLL') || '', err: props.getProperty('KD_POLL_ERR') || '' };
 }
 
 /** อายุในช่อง: ของที่อยู่ในช่องตอนนี้ (ยอดรอบล่าสุด) วางมาตั้งแต่เมื่อไร

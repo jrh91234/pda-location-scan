@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261118-1625'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261118-1631'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -3345,7 +3345,7 @@ function kdTopHtml() {
       '<button data-kdcolor="age" class="' + (KD.color === 'age' ? 'active' : '') + '">🕒 อายุในช่อง</button></div>' +
       '<button class="btn small' + (KDM.trail ? ' active' : '') + '" id="kdTrail" title="ลูกศร 10 ความเคลื่อนไหว Kingdee ล่าสุด">➜ ความเคลื่อนไหว</button>' +
     '</div>' +
-    '<div id="kdRound" class="kd-round"></div>' +
+    '<div id="kdStale"></div><div id="kdRound" class="kd-round"></div>' +
     '<div class="kdf-bar"><div class="ac-wrap kdf-wrap"><input id="kdfQ" class="field" autocomplete="off" spellcheck="false" enterkeyhint="search" placeholder="สแกน / พิมพ์ รหัส · Lot · ชื่อพาร์ท · Spec" value="' + esc(KDF.q) + '">' +
       '<div id="kdfSug" class="ac-list hidden" role="listbox"></div></div>' +
       '<button class="btn primary" id="kdfCam" title="เปิดกล้องสแกนป้าย">📸 สแกน</button></div>' +
@@ -3370,8 +3370,23 @@ function bindKdTop() {
   $('kdTrail').onclick = function () { KDM.trail = !KDM.trail; store('pda_kdm_trail', KDM.trail ? '1' : '0'); this.classList.toggle('active', KDM.trail); rpPaint(); };
   if (Date.now() - KDM.loadedAt > 60000) loadKdMoves();
 }
+// ยอด Kingdee ค้าง: ไฟล์ต้นทางยังอัปเดตเวลา แต่ตัวเลขไม่เปลี่ยนเลยเกิน 2 ชม. ทำงาน (จ.–ส. 08:00–18:00)
+function kdStaleHours() {
+  var t0 = kdTs(KDM.dataSince), t1 = kdTs(KDM.snapAt);
+  if (!t0 || !t1 || t1 <= t0) return 0;
+  var h = 0, step = 15 * 60000, end = Date.now(), t = Math.max(t0, end - 14 * 86400000);
+  for (; t < end; t += step) { var d = new Date(t), hr = d.getHours(); if (d.getDay() !== 0 && hr >= 8 && hr < 18) h += 0.25; }
+  return h;
+}
+function kdStaleHtml(short) {
+  if (kdStaleHours() < 2) return '';
+  return short ? '<span class="err-text"> · ⚠ ยอดไม่เปลี่ยนตั้งแต่ ' + esc(kdWhen(KDM.dataSince)) + '</span>'
+    : '<div class="kd-stale">⚠ <b>ยอด Kingdee ไม่เปลี่ยนเลยตั้งแต่ ' + esc(kdWhen(KDM.dataSince)) + '</b> (' + esc(agoText(KDM.dataSince)) + ')' +
+      '<br><span class="small">ไฟล์ต้นทางยังส่งมาทุก 10 นาที แต่ตัวเลขเหมือนเดิมทุกรอบ — ตัวดึงข้อมูล Kingdee ของทีมอาจหยุดทำงาน ยอดที่เห็นอาจไม่ใช่ยอดล่าสุด</span></div>';
+}
 function renderKdSnap() {
   var el = $('kdSnap'); if (!el) return;
+  var st = $('kdStale'); if (st) st.innerHTML = kdStaleHtml();
   el.innerHTML = KD.loading ? '⏳ กำลังดึงยอด Kingdee…'
     : KD.err ? '<span class="err-text">' + esc(KD.err) + '</span>' + (KD.rows.length ? ' (ใช้ข้อมูลล่าสุดที่มี)' : '')
     : KD.snapshotAt ? 'ยอด Kingdee ณ <b>' + esc(fmtWhen(kdSnapText())) + '</b> · ' + KD.rows.length.toLocaleString() + ' แถว · เช็คอัปเดตทุก 1 นาที' : '';
@@ -3647,11 +3662,12 @@ function renderKdLoc() {
   if (!S.location) { el.innerHTML = ''; return; }
   if (!KD.checkedAt && !KD.loading) kdCheck();
   if (!KD.rows.length) { el.innerHTML = ''; return; }
+  if (Date.now() - KDM.loadedAt > 15 * 60000 && !KDM.loading) loadKdMoves(); // รู้ว่ายอด Kingdee ค้างหรือไม่
   var b = kdCompute().bins[S.location], open = store('pda_kd_scan') !== '0';
   if (!b || !b.nk) { el.innerHTML = '<div class="kd-loc muted small">Kingdee: ไม่มีของในช่องนี้</div>'; return; }
   var found = b.keys.filter(function (y) { return y.k && y.a; }).length;
   el.innerHTML = '<div class="kd-loc"><button type="button" class="kd-loc-head" id="kdLocT"><span>📦 Kingdee: ช่องนี้มี <b>' + b.nk + '</b> รายการ · สแกนเจอ <b>' + found + '</b>' +
-      (found === b.nk && b.nd === 0 ? ' ✅ ครบ' : '') + '</span><span>' + (open ? '▲' : '▼') + '</span></button>' +
+      (found === b.nk && b.nd === 0 ? ' ✅ ครบ' : '') + kdStaleHtml(true) + '</span><span>' + (open ? '▲' : '▼') + '</span></button>' +
     (open ? kdTableHtml(b, true) : '') + '</div>';
   $('kdLocT').onclick = function () { store('pda_kd_scan', open ? '0' : '1'); renderKdLoc(); };
 }
@@ -3729,9 +3745,10 @@ function loadKdMoves() {
   api('getKingdeeMoves', { limit: 800 }).then(function (d) {
     KDM.loading = false; KDM.loadedAt = Date.now();
     var changed = JSON.stringify(d.moves.slice(0, 5)) !== JSON.stringify(KDM.moves.slice(0, 5)) || d.moves.length !== KDM.moves.length;
-    KDM.moves = d.moves || []; KDM.appOnly = d.appOnly || []; KDM.lastPoll = d.lastPoll; KDM.snapAt = d.snapAt; KDM.err = d.err;
+    KDM.moves = d.moves || []; KDM.appOnly = d.appOnly || []; KDM.lastPoll = d.lastPoll; KDM.snapAt = d.snapAt; KDM.err = d.err; KDM.dataSince = d.dataSince || '';
     storeJson('pda_kdm', KDM.moves.slice(0, 300));
-    if (S.view === 'kd') { renderKdMoves(); if (changed && MAP.data) renderMapGrid(); }
+    if (S.view === 'scan') renderKdLoc();
+    if (S.view === 'kd') { renderKdSnap(); renderKdMoves(); if (changed && MAP.data) renderMapGrid(); }
   }, function (err) {
     KDM.loading = false; KDM.err = err.message;
     if (S.view === 'kd') renderKdMoves();
