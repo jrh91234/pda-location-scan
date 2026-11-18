@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261118-1437'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261118-1625'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -3341,6 +3341,8 @@ function kdTopHtml() {
       '<span class="small">เทียบระดับ</span><div class="seg"><button data-kdmode="lot" class="' + (KD.mode === 'lot' ? 'active' : '') + '">รหัส + Lot</button>' +
       '<button data-kdmode="part" class="' + (KD.mode === 'part' ? 'active' : '') + '">รหัสอย่างเดียว</button></div>' +
       '<span id="kdSnap" class="small muted"></span>' +
+      '<span class="small">สีช่อง</span><div class="seg"><button data-kdcolor="cmp" class="' + (KD.color === 'cmp' ? 'active' : '') + '">เทียบยอด</button>' +
+      '<button data-kdcolor="age" class="' + (KD.color === 'age' ? 'active' : '') + '">🕒 อายุในช่อง</button></div>' +
       '<button class="btn small' + (KDM.trail ? ' active' : '') + '" id="kdTrail" title="ลูกศร 10 ความเคลื่อนไหว Kingdee ล่าสุด">➜ ความเคลื่อนไหว</button>' +
     '</div>' +
     '<div id="kdRound" class="kd-round"></div>' +
@@ -3348,15 +3350,22 @@ function kdTopHtml() {
       '<div id="kdfSug" class="ac-list hidden" role="listbox"></div></div>' +
       '<button class="btn primary" id="kdfCam" title="เปิดกล้องสแกนป้าย">📸 สแกน</button></div>' +
     '<div id="kdFind"></div>' +
-    '<div class="map-legend small">' + Object.keys(KD_ST).map(function (k) {
+    (KD.color === 'age'
+      ? '<div class="map-legend small">' + KDA_BANDS.map(function (b, i) { return '<span><i class="lg kd-age' + i + '"></i>' + b[1] + '</span>'; }).join('') +
+        '<span>เลขในช่อง = จำนวนวันของที่อยู่นานสุดในช่อง</span></div>'
+      : '<div class="map-legend small">' + Object.keys(KD_ST).map(function (k) {
       return '<span title="' + esc(KD_ST[k][2]) + '"><i class="lg kd-' + k + '"></i>' + KD_ST[k][1] + '</span>';
-    }).join('') + '<span><i class="lg kd-done-lg">✔</i>กดนับเสร็จแล้ว</span><span><i class="lg kd-moved-lg"></i>Kingdee เปลี่ยน (ช่วงที่เลือก)</span></div>' +
+    }).join('') + '<span><i class="lg kd-done-lg">✔</i>กดนับเสร็จแล้ว</span><span><i class="lg kd-moved-lg"></i>Kingdee เปลี่ยน (ช่วงที่เลือก)</span></div>') +
     '<div id="kdList"></div><div id="kdMoves"></div>';
 }
 function bindKdTop() {
   Array.prototype.forEach.call(document.querySelectorAll('[data-kdmode]'), function (b) {
     b.onclick = function () { KD.mode = b.getAttribute('data-kdmode'); store('pda_kd_mode', KD.mode); kdCompute.key = null; renderMap(); };
   });
+  Array.prototype.forEach.call(document.querySelectorAll('[data-kdcolor]'), function (b) {
+    b.onclick = function () { KD.color = b.getAttribute('data-kdcolor'); store('pda_kd_color', KD.color); KD.more = 0; renderMap(); };
+  });
+  loadKdAges();
   renderKdSnap(); renderKdRound(); renderKdMoves(); bindKdFind();
   $('kdTrail').onclick = function () { KDM.trail = !KDM.trail; store('pda_kdm_trail', KDM.trail ? '1' : '0'); this.classList.toggle('active', KDM.trail); rpPaint(); };
   if (Date.now() - KDM.loadedAt > 60000) loadKdMoves();
@@ -3407,17 +3416,33 @@ function renderKdSummary(x) {
 }
 function kdCellHtml(code, x) {
   var b = x.bins[code], cls = 'cell ' + (b ? 'kd-' + b.st : 'empty');
+  var ag = KD.color === 'age' && b ? kdBinAge().bins[code] : null;
+  if (KD.color === 'age') cls = 'cell ' + (ag ? 'kd-age kd-age' + kdAgeBand(ag.days) : b ? 'kd-age-none' : 'empty');
   if (b && b.marked) cls += ' kd-done';
   if (x.moved && x.moved[code]) cls += ' kd-moved';
   if (KDF.hits && KDF.hits[code]) cls += KDF.hits[code] === 'lot' ? ' kdf-hit' : ' kdf-hit2';
   if (KDF.pkgRec && KDF.pkgState === 'found' && KDF.pkgRec.location === code) cls += ' kdf-pkg-cell';
   if (code === S.location) cls += ' cur';
   var txt = !b ? '' : b.st === 'todo' ? (b.nk > 1 ? b.nk : '') : b.st === 'diff' ? b.nd : b.st === 'extra' ? (b.na > 1 ? b.na : '') : '';
-  return '<td><button class="' + cls + '" data-cell="' + code + '" title="' + code + (b ? ' · ' + KD_ST[b.st][1] + ' · Kingdee ' + b.nk + ' รายการ · นับได้ ' + b.na + ' รายการ' : '') + '">' + txt + '</button></td>';
+  if (KD.color === 'age') txt = ag ? ag.days : '';
+  return '<td><button class="' + cls + '" data-cell="' + code + '" title="' + code + (ag ? ' · อยู่ช่องนี้ ' + kdAgeText(ag) : '') + (b ? ' · ' + KD_ST[b.st][1] + ' · Kingdee ' + b.nk + ' รายการ · นับได้ ' + b.na + ' รายการ' : '') + '">' + txt + '</button></td>';
 }
 // รายการช่องที่ต้องดู (กรองตามสถานะ)
 function renderKdList(x) {
   var el = $('kdList'); if (!el) return;
+  if (KD.color === 'age') {
+    var ah = kdAgeListHtml();
+    if (el._html !== ah) {
+      el._html = ah; el.innerHTML = ah;
+      Array.prototype.forEach.call(el.querySelectorAll('[data-kdc]'), function (b) {
+        b.onclick = function () { var loc = b.getAttribute('data-kdc'); mapGotoCell(loc); setTimeout(function () { openKdCell(loc); }, 350); };
+      });
+      if ($('kdMore')) $('kdMore').onclick = function () { KD.more = (KD.more || 0) + 30; renderKdList(kdCompute()); };
+      if ($('kdLess')) $('kdLess').onclick = function () { KD.more = 0; renderKdList(kdCompute()); };
+      if ($('kdaXlsx')) $('kdaXlsx').onclick = exportKdAges;
+    }
+    return;
+  }
   var f = KD.filter, list = Object.keys(x.bins).filter(function (loc) {
     var st = x.bins[loc].st; return f === 'diff' ? (st === 'diff' || st === 'missing' || st === 'extra') : st === f;
   }).sort();
@@ -3465,6 +3490,108 @@ function kdSpecOf(part) {
   return kdSpecOf.map[part] || (bomInfo(part) || {}).spec || '';
 }
 function kdSpecHtml(part) { var sp = kdSpecOf(part); return sp ? '<span class="kd-spec">' + esc(sp) + '</span>' : ''; }
+// ===== อายุในช่อง: ของวางอยู่ในช่องนี้มานานแค่ไหน =====
+// แหล่งข้อมูล: (1) Kingdee — ไล่ย้อนรายการเข้า/ย้ายเข้าช่อง (ของเก่าออกก่อน) จากเซิร์ฟเวอร์ getBinAges
+//              (2) เวลาสแกนกล่องที่ยังอยู่ในช่องครั้งแรกในแอป  (3) วันที่ใน Lot = อายุสูงสุดที่เป็นไปได้
+// ถ้าของอยู่มาก่อนเริ่มเก็บประวัติ Kingdee → แสดงเป็น "≥ X วัน" (อย่างน้อย)
+var KDA = { ages: storeJson('pda_kda') || {}, start: store('pda_kda_start') || '', loadedAt: 0, loading: false, err: '' };
+KD.color = store('pda_kd_color') === 'age' ? 'age' : 'cmp';
+var KDA_BANDS = [[7, '≤ 7 วัน'], [30, '8–30 วัน'], [90, '1–3 เดือน'], [1e9, '> 3 เดือน']];
+function loadKdAges(force) {
+  if (KDA.loading || (!force && Date.now() - KDA.loadedAt < 10 * 60000)) return;
+  KDA.loading = true;
+  api('getBinAges').then(function (d) {
+    KDA.loading = false; KDA.loadedAt = Date.now(); KDA.err = '';
+    KDA.ages = d.ages || {}; KDA.start = d.start || '';
+    storeJson('pda_kda', KDA.ages); store('pda_kda_start', KDA.start);
+    kdBinAge.key = null; kdRefreshViews(); if (S.view === 'kd') renderKdList(kdCompute());
+  }, function (err) { KDA.loading = false; KDA.err = err.message; });
+}
+function kdTs(at) { var t = Date.parse(String(at || '').slice(0, 19).replace(' ', 'T')); return isNaN(t) ? 0 : t; }
+function kdLotDate(lot) {
+  var m = /^(20\d\d)(\d\d)(\d\d)/.exec(String(lot || '')); if (!m) return 0;
+  var t = Date.parse(m[1] + '-' + m[2] + '-' + m[3] + 'T00:00:00'); return isNaN(t) ? 0 : t;
+}
+function kdDays(t) { return Math.max(0, Math.floor((Date.now() - t) / 86400000)); }
+// อายุของ 1 แถว (รหัส/Lot) ในช่อง → { t: เวลาเริ่ม, days, min: true = อย่างน้อย, lotDays }
+function kdAgeOf(loc, y) {
+  var lots = y.lot ? [y.lot] : Object.keys(((y.k || y.a) || {}).lots || {});
+  var kdT = 0, before = false, lotT = 0;
+  if (y.k) lots.forEach(function (l) {
+    var v = KDA.ages[loc + '|' + y.part + '|' + l];
+    if (v === '') before = true; else if (v) { var t = kdTs(v); if (t && (!kdT || t < kdT)) kdT = t; }
+  });
+  lots.forEach(function (l) { var t = kdLotDate(l); if (t && (!lotT || t < lotT)) lotT = t; });
+  var appT = y.a && y.a.at0 ? kdTs(y.a.at0) : 0, t = 0, min = false;
+  if (before) { t = kdTs(KDA.start) || 0; min = true; }
+  else if (kdT) t = kdT;
+  if (appT && (!t || appT < t)) t = appT;
+  if (!t) return null;
+  if (lotT && lotT > t) t = lotT; // เข้าช่องก่อนผลิต Lot ไม่ได้
+  return { t: t, days: kdDays(t), min: min, lotDays: lotT ? kdDays(lotT) : null };
+}
+function kdAgeText(g) { return g ? (g.min ? '≥ ' : '') + g.days + ' วัน' : '—'; }
+function kdTsText(t) { var d = new Date(t); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()); }
+function kdAgeBand(days) { for (var i = 0; i < KDA_BANDS.length; i++) if (days <= KDA_BANDS[i][0]) return i; return KDA_BANDS.length - 1; }
+function kdAgeHtml(g) {
+  if (!g) return '';
+  return '<span class="kd-age kda-chip kd-age' + kdAgeBand(g.days) + '">🕒 อยู่ช่องนี้ ' + kdAgeText(g) + '</span>' +
+    '<span class="small muted"> ' + (g.min ? 'ก่อน ' : 'ตั้งแต่ ') + esc(kdWhen(kdTsText(g.t))) +
+    (g.lotDays != null ? ' · Lot ' + g.lotDays + ' วัน' : '') + '</span>';
+}
+// ทุกช่อง: แถวที่อยู่นานสุด (ของที่ Kingdee มี หรือแอปนับได้)
+function kdBinAge() {
+  var x = kdCompute(), key = kdCompute.key + '|' + KDA.loadedAt + '|' + KDA.start + '|' + Object.keys(KDA.ages).length + '|' + workDay();
+  if (kdBinAge.key === key && kdBinAge.v) return kdBinAge.v;
+  var out = {}, rows = [];
+  Object.keys(x.bins).forEach(function (loc) {
+    var b = x.bins[loc], best = null;
+    b.keys.forEach(function (y) {
+      var g = kdAgeOf(loc, y); if (!g) return;
+      rows.push({ loc: loc, y: y, g: g });
+      if (!best || g.days > best.days) best = g;
+    });
+    if (best) out[loc] = best;
+  });
+  rows.sort(function (a, b) { return b.g.days - a.g.days || (a.loc < b.loc ? -1 : 1); });
+  kdBinAge.key = key;
+  return (kdBinAge.v = { bins: out, rows: rows });
+}
+function kdAgeListHtml() {
+  var A = kdBinAge(), rows = A.rows, n = rows.length;
+  if (!n) return '<div class="find-box"><div class="muted small center pad">' + (KDA.loading ? '⏳ กำลังโหลดอายุในช่อง…' : 'ยังไม่มีข้อมูลอายุในช่อง') + '</div></div>';
+  var sum = 0, nMin = 0, band = [0, 0, 0, 0];
+  rows.forEach(function (r) { sum += r.g.days; if (r.g.min) nMin++; band[kdAgeBand(r.g.days)]++; });
+  var lim = (mapWide() ? 30 : 8) + (KD.more || 0);
+  return '<div class="find-box"><div class="kda-sum">อายุในช่องเฉลี่ย <b>' + (nMin ? '≥ ' : '') + (Math.round(sum / n * 10) / 10) + ' วัน</b> · ' + n.toLocaleString() + ' รายการ<br>' +
+      KDA_BANDS.map(function (b, i) { return '<span class="kda-chip kd-age' + i + '">' + b[1] + ': ' + band[i] + '</span>'; }).join(' ') + '</div>' +
+    '<div class="small muted">' + (KDA.start ? 'ประวัติ Kingdee เริ่มเก็บ ' + esc(kdWhen(KDA.start)) + ' — ของที่อยู่ก่อนนั้นแสดงเป็น "≥" (อย่างน้อย) · ' : '') + 'อายุ Lot = อายุมากสุดที่เป็นไปได้ ' +
+      '<button type="button" class="btn small" id="kdaXlsx">⬇ Excel</button></div>' +
+    '<div class="sec-title small"><span>อยู่นานสุด</span></div><div class="find-list">' + rows.slice(0, lim).map(function (r) {
+      var nm = (r.y.k && r.y.k.name) || (bomInfo(r.y.part) || {}).name || '';
+      return '<button type="button" class="find-item" data-kdc="' + r.loc + '"><span class="kda-days kd-age' + kdAgeBand(r.g.days) + '">' + (r.g.min ? '≥' : '') + r.g.days + '<small>วัน</small></span>' +
+        '<span class="find-main"><span class="find-top"><span class="loc-pill">' + r.loc + '</span> <b>' + esc(r.y.part) + '</b>' + (r.y.lot ? ' · ' + esc(r.y.lot) : '') + '</span>' +
+        '<span class="find-sub muted">' + esc(nm) + (kdSpecOf(r.y.part) ? ' · ' + kdSpecHtml(r.y.part) : '') + '</span>' +
+        '<span class="find-sub small muted">' + (r.g.min ? 'ก่อน ' : 'ตั้งแต่ ') + esc(kdWhen(kdTsText(r.g.t))) + (r.g.lotDays != null ? ' · Lot ' + r.g.lotDays + ' วัน' : '') +
+          (r.y.k ? ' · Kingdee ' + kdFmt(r.y.k.q) + ' ' + esc(r.y.k.unit) : ' · แอปนับได้ ' + (r.y.a.noQty ? '?' : kdFmt(r.y.a.q))) + '</span></span></button>';
+    }).join('') + '</div>' + (n > lim ? '<button type="button" class="btn small" id="kdMore">ดูเพิ่ม (อีก ' + (n - lim) + ')</button>' : '') +
+    (KD.more ? ' <button type="button" class="btn small" id="kdLess">ย่อ</button>' : '') + '</div>';
+}
+function exportKdAges() {
+  var rows = kdBinAge().rows; if (!rows.length) { toast('ยังไม่มีข้อมูล'); return; }
+  loadScriptOnce(XLSX_URL).then(function () {
+    var wb = XLSX.utils.book_new();
+    var ws = XLSX.utils.json_to_sheet(rows.map(function (r) {
+      var y = r.y, info = bomInfo(y.part) || {};
+      return { 'Location': r.loc, 'รหัส': y.part, 'Lot': y.lot || Object.keys(((y.k || y.a) || {}).lots || {}).join(', '), 'ชื่อ': (y.k && y.k.name) || info.name || '', 'Spec': kdSpecOf(y.part),
+        'อยู่ในช่อง (วัน)': r.g.days, 'อย่างน้อย': r.g.min ? 'ใช่ (อยู่ก่อนเริ่มเก็บประวัติ)' : '', 'ตั้งแต่': kdTsText(r.g.t), 'อายุ Lot (วัน)': r.g.lotDays == null ? '' : r.g.lotDays,
+        'Kingdee จำนวน': y.k ? y.k.q : '', 'หน่วย': y.k ? y.k.unit : (y.a ? y.a.unit : ''), 'คลัง': y.k ? y.k.wh : '', 'นับได้ในแอป': y.a && !y.a.noQty ? y.a.q : '' };
+    }));
+    ws['!cols'] = [12, 14, 12, 30, 18, 10, 22, 16, 10, 12, 6, 28, 10].map(function (w) { return { wch: w }; });
+    XLSX.utils.book_append_sheet(wb, ws, 'อายุในช่อง');
+    XLSX.writeFile(wb, 'อายุในช่อง_' + workDay() + '.xlsx');
+  }, function () { toast('โหลดตัวสร้าง Excel ไม่ได้ (ต้องต่ออินเทอร์เน็ต)', 3000); });
+}
 // ตารางเทียบในช่อง
 function kdTableHtml(b, compact) {
   if (!b || !b.keys.length) return '<div class="muted small center pad">ทั้ง Kingdee และในแอปไม่มีของในช่องนี้</div>';
@@ -3476,7 +3603,8 @@ function kdTableHtml(b, compact) {
       var km = kdLastMove(b.loc, y.part, y.lot);
       return '<tr class="' + (y.eq ? 'ok' : 'bad') + '"><td><span class="kd-ico">' + ico + '</span><b>' + esc(y.part) + '</b>' + (y.lot ? '<br><span class="small">Lot ' + esc(y.lot) + '</span>' : '') +
           (name && !compact ? '<br><span class="small muted">' + esc(name) + '</span>' : '') +
-          (kdSpecOf(y.part) ? '<br>' + kdSpecHtml(y.part) : '') + '</td>' +
+          (kdSpecOf(y.part) ? '<br>' + kdSpecHtml(y.part) : '') +
+          (function () { var g = kdAgeOf(b.loc, y); return g ? '<br>' + kdAgeHtml(g) : ''; })() + '</td>' +
         '<td class="num">' + (y.k ? kdFmt(y.k.q) + ' <span class="small muted">' + esc(y.k.unit) + '</span>' : '—') +
           (km ? '<br><span class="kd-when">' + (km[1] === 'out' || (km[1] === 'move' && km[4] === b.loc) ? 'ออก ' : 'เข้า ') + esc(kdWhen(km[0])) + '</span>'
             : y.k ? '<br><span class="kd-when muted">ยอด ณ ' + esc(kdWhen(kdSnapText())) + '</span>' : '') + '</td>' +

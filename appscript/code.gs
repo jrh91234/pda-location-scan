@@ -18,7 +18,7 @@ const MAX_BATCH = 50;
 // ======================= Web App =======================
 const API_ACTIONS = { ping: ping, saveScans: saveScans, listScans: listScans, deleteScan: deleteScan, updateQty: updateQty, updateLocation: updateLocation, findByQr: findByQr, findSamePkg: findSamePkg, getScans: getScans, getTimeline: getTimeline, getPartPackages: getPartPackages, getLocationMap: getLocationMap, getLocationEvents: getLocationEvents,
   uploadPhoto: uploadPhoto, getPhoto: getPhoto, deletePhoto: deletePhoto,
-  getCountState: getCountState, setCountRound: setCountRound, markBinCounted: markBinCounted, getKingdeeMoves: getKingdeeMoves,
+  getCountState: getCountState, setCountRound: setCountRound, markBinCounted: markBinCounted, getKingdeeMoves: getKingdeeMoves, getBinAges: getBinAges,
   getCountProfile: getCountProfile, saveCountProfile: saveCountProfile, saveCountSample: saveCountSample };
 
 function doPost(e) {
@@ -945,6 +945,33 @@ function getKingdeeMoves(opt) {
   return { moves: out, appOnly: appOnly.slice(0, 100), snapAt: props.getProperty('KD_SNAP_AT') || '', lastPoll: props.getProperty('KD_LAST_POLL') || '', err: props.getProperty('KD_POLL_ERR') || '' };
 }
 
+/** อายุในช่อง: ของที่อยู่ในช่องตอนนี้ (ยอดรอบล่าสุด) วางมาตั้งแต่เมื่อไร
+ *  ไล่ย้อนรายการ "เข้า/ย้ายเข้า" ช่องนั้นจากใหม่ → เก่า สะสมจำนวนจนครบยอดที่เหลือ (ของเก่าออกก่อน: FIFO)
+ *  ages[ช่อง|รหัส|Lot] = เวลาที่ของชิ้นเก่าสุดที่ยังเหลือเข้าช่อง · '' = อยู่มาก่อนเริ่มเก็บประวัติ (start) */
+function getBinAges() {
+  const props = PropertiesService.getScriptProperties(), ss = book_();
+  const snap = ss.getSheetByName(KD_SNAP_SHEET), mv = ss.getSheetByName(KD_MOVE_SHEET);
+  const need = {}, ages = {};
+  if (snap && snap.getLastRow() > 1) snap.getRange(2, 1, snap.getLastRow() - 1, 5).getValues().forEach(function (r) {
+    if (r[0]) need[String(r[0])] = Number(r[4]) || 0;
+  });
+  let start = props.getProperty('KD_TRACK_START') || '';
+  const left = {};
+  Object.keys(need).forEach(function (k) { left[k] = need[k]; ages[k] = ''; });
+  if (mv && mv.getLastRow() > 1) {
+    const vals = mv.getRange(2, 1, mv.getLastRow() - 1, 7).getValues();
+    if (!start) { start = fmt_(vals[0][0]); props.setProperty('KD_TRACK_START', start); }
+    for (let i = vals.length - 1; i >= 0; i--) {
+      const r = vals[i], t = String(r[1]), to = String(r[5]);
+      if (!to || (t !== 'in' && t !== 'move')) continue;
+      const k = to + '|' + r[2] + '|' + r[3];
+      if (!(left[k] > 1e-9)) continue;
+      left[k] -= Number(r[6]) || 0;
+      if (left[k] <= 1e-9) ages[k] = fmt_(r[0]);
+    }
+  }
+  return { start: start, snapAt: props.getProperty('KD_SNAP_AT') || '', ages: ages };
+}
 
 // ======================= นับจากรูป (สอนเองที่หน้างาน) =======================
 // CountProfiles: แม่แบบที่สอนแล้วต่อรหัสพาร์ท (ทุกเครื่องใช้ร่วมกัน)

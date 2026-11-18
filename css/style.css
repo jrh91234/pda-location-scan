@@ -577,3 +577,13 @@ main.view-kd > .map-top, .map-top.tall { position: static; }
 .pkg-box .pkg-list { margin: 6px 0; display: flex; flex-direction: column; gap: 4px; }
 .pkg-actions { flex-wrap: wrap; }
 .pkg-actions .btn { flex: 1 1 100%; }
+.cell.kd-age0, .lg.kd-age0, .kda-chip.kd-age0, .kda-days.kd-age0 { background: #d7f2e1; border-color: #8fd3a8; color: #14532d; }
+.cell.kd-age1, .lg.kd-age1, .kda-chip.kd-age1, .kda-days.kd-age1 { background: #fff1b8; border-color: #e8c84a; color: #5c4400; }
+.cell.kd-age2, .lg.kd-age2, .kda-chip.kd-age2, .kda-days.kd-age2 { background: #fdba74; border-color: #f08a3c; color: #5a2400; }
+.cell.kd-age3, .lg.kd-age3, .kda-chip.kd-age3, .kda-days.kd-age3 { background: #dc2626; border-color: #b91c1c; color: #fff; }
+.cell.kd-age-none { background: #f3f4f6; border-color: #d1d5db; }
+.cell.kd-age { font-size: 10px; font-weight: 700; }
+.kda-sum { margin-bottom: 4px; line-height: 1.9; }
+.kda-chip { display: inline-block; font-size: 12px; padding: 0 6px; border-radius: 6px; border: 1px solid; white-space: nowrap; }
+.kda-days { flex: none; min-width: 44px; text-align: center; font-weight: 700; font-size: 15px; border-radius: 8px; border: 1px solid; padding: 4px 2px; margin-right: 8px; line-height: 1.1; }
+.kda-days small { display: block; font-size: 10px; font-weight: 400; }
