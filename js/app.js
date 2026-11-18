@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261117-2342'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261118-0754'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -385,7 +385,7 @@ function camContinuous(raw) {
   saveDraft(); // บันทึก + ปี๊บ + ส่งขึ้นเซิร์ฟเวอร์เบื้องหลัง
   // เช็คกับชีตตามหลัง (ข้อมูลจากเครื่องอื่น) → ติดคำเตือนที่รายการ
   var saved = S.recent[0];
-  if (saved && saved.qr_raw === d.qr_raw && pkgKey(d.pkg_ref) && apiUrl()) {
+  if (PKG_RULE_ON && saved && saved.qr_raw === d.qr_raw && pkgKey(d.pkg_ref) && apiUrl()) {
     api('findSamePkg', d.part_code, d.lot_no, d.pkg_ref, d.qr_raw).then(function (list) {
       list = (list || []).filter(function (r) { return r.scan_id !== saved.scan_id; });
       if (!list.length) return;
@@ -401,17 +401,20 @@ function camContinuous(raw) {
 }
 
 // รหัส + Lot + Package เดียวกัน แต่ QR ต่างกัน (ป้ายใหม่หลังแบ่งกล่อง / สแกนกล่องเดิมซ้ำด้วยป้ายใหม่)
+// ⏸ ปิดไว้ก่อน (ยังไม่ใช้งานจริง) — เปลี่ยนเป็น true เมื่อพร้อมเปิดกติกา Package ซ้ำ
+var PKG_RULE_ON = false;
 function pkgKey(v) { return String(v == null ? '' : v).trim().toUpperCase().replace(/^0+(?=\w)/, ''); }
 function samePkgOf(a, b) {
   return !!(a && b && pkgKey(a.pkg_ref) && String(a.part_code || '').toUpperCase() === String(b.part_code || '').toUpperCase() &&
     String(a.lot_no || '') === String(b.lot_no || '') && pkgKey(a.pkg_ref) === pkgKey(b.pkg_ref) && a.qr_raw !== b.qr_raw);
 }
 function localSamePkg(d) {
+  if (!PKG_RULE_ON) return [];
   return S.recent.filter(function (r) { return (r.status === 'pending' || r.status === 'saved') && samePkgOf(r, d); });
 }
 // รวมผลในเครื่อง + ชีต (ไม่ซ้ำ scan_id · ตัดรายการที่ในเครื่องรู้ว่าถูกลบแล้ว)
 function draftSamePkg(d) {
-  if (!d || !pkgKey(d.pkg_ref)) return [];
+  if (!PKG_RULE_ON || !d || !pkgKey(d.pkg_ref)) return [];
   var out = localSamePkg(d), seen = {};
   out.forEach(function (r) { seen[r.scan_id] = 1; });
   (d.pkgDup || []).forEach(function (r) {
@@ -818,7 +821,7 @@ function syncRecent() {
 function checkDraftDup() {
   var d = S.draft; if (!d || !apiUrl()) return;
   var qr = d.qr_raw;
-  if (pkgKey(d.pkg_ref)) {
+  if (PKG_RULE_ON && pkgKey(d.pkg_ref)) {
     var before = draftSamePkg(d).length;
     api('findSamePkg', d.part_code, d.lot_no, d.pkg_ref, qr).then(function (list) {
       if (!S.draft || S.draft.qr_raw !== qr) return;
