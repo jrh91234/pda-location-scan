@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261118-2126'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261119-0820'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -3207,7 +3207,7 @@ function isMapView() { return S.view === 'map' || S.view === 'kd'; }
 var KD_URL = (window.PDA_CONFIG && window.PDA_CONFIG.KINGDEE_ONHAND_URL) || 'https://somrudeebanthao09.github.io/OnHand-Inventory-Planner/OnHandSeed.js';
 var KD_TTL = 10 * 60000;
 var KD = {
-  rows: storeJson('pda_kd_rows') || [], pub: storeJson('pda_kd_pub') || [], snapshotAt: store('pda_kd_snap') || '', loadedAt: 0, loading: false, err: '',
+  rows: storeJson('pda_kd_rows') || [], pub: storeJson('pda_kd_pub') || [], pubOk: !!storeJson('pda_kd_pub'), snapshotAt: store('pda_kd_snap') || '', loadedAt: 0, loading: false, err: '',
   mode: store('pda_kd_mode') === 'part' ? 'part' : 'lot', filter: 'diff', all: false,
   count: storeJson('pda_kd_count') || { round: null, marks: {} },
   lastMod: store('pda_kd_lm') || '', checkedAt: 0, checking: false
@@ -3220,7 +3220,7 @@ function kdCheckWanted() {
 }
 function kdCheck() {
   if (KD.checking || KD.loading) return;
-  if (!KD.rows.length || !KD.lastMod) { KD.checkedAt = Date.now(); loadKd(true); return; }
+  if (!KD.rows.length || !KD.lastMod || !KD.pubOk) { KD.checkedAt = Date.now(); loadKd(true); return; } // pub ว่าง = เครื่องที่โหลดยอดไว้ก่อนมี Public area
   KD.checking = true;
   fetch(KD_URL + '?h=' + Date.now(), { method: 'HEAD', cache: 'no-store' }).then(function (r) {
     KD.checking = false; KD.checkedAt = Date.now();
@@ -3259,7 +3259,7 @@ function loadKd(force) {
       if (isPub) pubAll.push(row); else { rows.push(row); whs[row[7]] = 1; }
     });
     // Public area เฉพาะคลังที่มีช่องในผัง (ไม่เอา Scrap / Defective / คลังที่ไม่เกี่ยว)
-    KD.pub = pubAll.filter(function (r) { return whs[r[7]]; }); storeJson('pda_kd_pub', KD.pub);
+    KD.pub = pubAll.filter(function (r) { return whs[r[7]]; }); storeJson('pda_kd_pub', KD.pub); KD.pubOk = true;
     KD.rows = rows; KD.snapshotAt = d.snapshotAt || ''; KD.loadedAt = Date.now(); KD.loading = false; kdCompute.key = null;
     if (KDF.q) kdfRun(KDF.q, false);
     storeJson('pda_kd_rows', rows); store('pda_kd_snap', KD.snapshotAt);
