@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261119-0820'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261119-1428'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -1954,7 +1954,8 @@ function saveManual() {
 
 // ======================= ผัง Location =======================
 // แสดงทุก Location ตามแถวชั้นวาง (โซน → แถว → ช่อง 01–16 × ชั้น A/B) ว่าช่องไหนสแกนของเข้าไปแล้ว
-var MAP = { data: null, loading: false, zone: store('pda_map_zone') || '', mode: 'all', err: '', more: false, trail: store('pda_map_trail') !== '0' };
+var MAP = { data: null, loading: false, zone: store('pda_map_zone') || '', mode: 'all', err: '', more: false, trail: store('pda_map_trail') !== '0',
+  from: store('pda_map_from') || '', to: store('pda_map_to') || '' };
 MAP.items = storeJson('pda_map_items') || []; MAP.itemsSig = MAP.items.length ? (store('pda_map_sig') || '') : '';
 MAP.q = ''; MAP.findAll = false;
 var TRAIL_N = 10;
@@ -2014,9 +2015,10 @@ function renderMap() {
           return '<button data-zone="' + z + '" class="' + (act ? 'active' : '') + '">' + (pair ? MAP_PAIR.join(' | ') : z) + '</button>';
         }).join('') + '</div>' +
         (KDV ? '' : '<div class="seg">' +
-          '<button data-mode="all" class="' + (MAP.mode === 'all' ? 'active' : '') + '">ทั้งหมด</button>' +
-          '<button data-mode="today" class="' + (MAP.mode === 'today' ? 'active' : '') + '">วันนี้</button>' +
+          MAP_MODES.map(function (o) { return '<button data-mode="' + o[0] + '" class="' + (MAP.mode === o[0] ? 'active' : '') + '">' + o[1] + '</button>'; }).join('') +
         '</div>') +
+        (!KDV && MAP.mode === 'custom' ? '<div class="kdm-dates map-dates"><label>ตั้งแต่ <input type="date" id="mapFrom" class="field" value="' + esc(MAP.from) + '" max="' + workDay() + '"></label>' +
+          '<label>ถึง <input type="date" id="mapTo" class="field" value="' + esc(MAP.to) + '" max="' + workDay() + '"></label></div>' : '') +
         '<button class="btn small live-btn' + (MAP.live ? ' active' : '') + '" id="mapLive" title="โหลดผังใหม่เองทุก 30 วินาที (เฉพาะตอนเปิดหน้าผังอยู่)">' +
           '<i class="live-dot"></i>อัปเดตอัตโนมัติ</button><span id="mapAge" class="muted small map-age"></span>' +
         (KDV ? '' : '<button class="btn small' + (MAP.trail ? ' active' : '') + '" id="mapTrail" title="แสดงลูกศร 10 Action ล่าสุด (บันทึก / ย้าย / แก้ยอด / ลบ)">➜ ' + TRAIL_N + ' Action ล่าสุด</button>') +
@@ -2024,7 +2026,7 @@ function renderMap() {
       '</div>' +
       (KDV ? kdTopHtml() :
       '<div class="map-legend small"><span><i class="lg empty"></i>ว่าง</span><span><i class="lg used"></i>มีของ</span>' +
-        '<span><i class="lg today"></i>สแกน/ย้ายวันนี้</span><span><i class="lg cur"></i>Location ปัจจุบัน</span>' +
+        '<span><i class="lg today"></i>สแกน/แก้ ' + esc(mapRangeLabel()) + '</span><span><i class="lg cur"></i>Location ปัจจุบัน</span>' +
         '<span><i class="lg hot"></i>เคลื่อนไหวใน 1 ชม.</span><span><i class="lg latest"></i>ล่าสุด</span>' +
         (MAP.trail ? '<span><i class="lg-trail"></i><i class="trail-badge">1</i>' + TRAIL_N + ' Action ล่าสุด เรียงตามเวลา (1 = ล่าสุด, จาง = เก่ากว่า)</span><span><i class="lg-move"></i>ย้ายของ: ต้นทาง → ปลายทาง</span>' : '') + '</div>' +
       '<div class="map-search ac-wrap"><input id="mapQ" class="field" placeholder="🔍 ค้นหาของ: Lot / รหัส / ชื่อ / Location (พิมพ์บางส่วนได้)" autocomplete="off" value="' + esc(MAP.q) + '">' +
@@ -2038,7 +2040,20 @@ function renderMap() {
     b.onclick = function () { MAP.zone = b.getAttribute('data-zone'); renderMap(); };
   });
   Array.prototype.forEach.call(document.querySelectorAll('[data-mode]'), function (b) {
-    b.onclick = function () { MAP.mode = b.getAttribute('data-mode'); renderMap(); };
+    b.onclick = function () {
+      MAP.mode = b.getAttribute('data-mode');
+      if (MAP.mode === 'custom' && !MAP.from) { MAP.from = MAP.to = workDay(); }
+      renderMap();
+    };
+  });
+  ['mapFrom', 'mapTo'].forEach(function (id) {
+    var e = $(id); if (!e) return;
+    e.onchange = function () {
+      if (!this.value) return;
+      if (id === 'mapFrom') { MAP.from = this.value; if (!MAP.to || MAP.to < MAP.from) MAP.to = MAP.from; }
+      else { MAP.to = this.value; if (!MAP.from || MAP.from > MAP.to) MAP.from = MAP.to; }
+      store('pda_map_from', MAP.from); store('pda_map_to', MAP.to); renderMap();
+    };
   });
   $('mapReload').onclick = function () { loadMap(true); if (KDV) { loadKd(true); loadCount(); } };
   $('mapLive').onclick = function () {
@@ -2117,7 +2132,7 @@ function mapAllItems() {
   var seen = {};
   var out = MAP.items.map(function (r) {
     seen[r[0] + '|' + r[1] + '|' + r[2] + '|' + r[3]] = 1;
-    return { loc: r[0], part: String(r[1] || ''), lot: String(r[2] || ''), at: r[3], qty: r[4], unit: r[5], by: String(r[6] || '') };
+    return { loc: r[0], part: String(r[1] || ''), lot: String(r[2] || ''), at: r[3], qty: r[4], unit: r[5], by: String(r[6] || ''), ed: String(r[7] || '') };
   });
   // รายการรอส่ง + ที่เครื่องนี้เพิ่งส่งขึ้นไปแต่ผังยังไม่ได้โหลดใหม่
   S.recent.forEach(function (r) {
@@ -2286,6 +2301,33 @@ function mapPendingByLoc() {
   return out;
 }
 
+// ช่วงวันบนผัง: ทั้งหมด / วันนี้ / เมื่อวาน / 7 วัน / เลือกวัน (วันทำงานตัด 08:00)
+var MAP_MODES = [['all', 'ทั้งหมด'], ['today', 'วันนี้'], ['yday', 'เมื่อวาน'], ['7d', '7 วัน'], ['custom', '📅 เลือกวัน']];
+function mapRange() {
+  var t = workDay(), day = 86400000;
+  if (MAP.mode === 'today') return { from: t, to: t };
+  if (MAP.mode === 'yday') { var y = workDay(Date.now() - day); return { from: y, to: y }; }
+  if (MAP.mode === '7d') return { from: workDay(Date.now() - 6 * day), to: t };
+  if (MAP.mode === 'custom' && MAP.from) return { from: MAP.from, to: MAP.to || MAP.from };
+  return null;
+}
+function mapRangeLabel() {
+  var r = mapRange();
+  if (!r || MAP.mode === 'today') return 'วันนี้';
+  if (MAP.mode === 'yday') return 'เมื่อวาน';
+  if (MAP.mode === '7d') return '7 วัน';
+  return r.from === r.to ? fmtDay(r.from) : fmtDay(r.from) + ' – ' + fmtDay(r.to);
+}
+function fmtDay(d) { var m = /^(\d{4})-(\d\d)-(\d\d)/.exec(d || ''); return m ? Number(m[3]) + '/' + Number(m[2]) + '/' + String(Number(m[1]) + 543).slice(2) : d; }
+// ของที่ยังอยู่ในช่อง ซึ่งสแกน/แก้ล่าสุดในช่วงที่เลือก → { loc: จำนวนกล่อง }
+function mapRangeCounts(r) {
+  var out = {};
+  mapAllItems().forEach(function (it) {
+    var at = it.ed && it.ed > String(it.at) ? it.ed : it.at, d = workShiftDate(at);
+    if (d && d >= r.from && d <= r.to) out[it.loc] = (out[it.loc] || 0) + 1;
+  });
+  return out;
+}
 function renderMapGrid() {
   var out = $('mapOut'); if (!out) return;
   if ($('mapReload')) $('mapReload').disabled = MAP.loading;
@@ -2295,9 +2337,10 @@ function renderMapGrid() {
     return;
   }
   var map = MAP.data.map || {}, pend = mapPendingByLoc(), lay = mapLayout();
+  var rng = S.view === 'kd' ? null : mapRange(), rc = rng && MAP.mode !== 'today' ? mapRangeCounts(rng) : null;
   function info(code) {
     var m = map[code] || { n: 0, today: 0 }, p = pend[code] || 0;
-    return { n: m.n + p, today: m.today + p, last: m.last, by: m.by, ev: m.ev };
+    return { n: m.n + p, today: rc ? (rc[code] || 0) : m.today + p, last: m.last, by: m.by, ev: m.ev };
   }
   renderMapRecent();
   var latestLoc = (MAP.data.recent && MAP.data.recent[0]) ? (MAP.data.recent[0].to || MAP.data.recent[0].from) : '';
@@ -2314,8 +2357,8 @@ function renderMapGrid() {
     all++; if (i.n) used++; if (i.today) usedToday++;
     if (inZone) { zAll++; if (i.n) zUsed++; if (i.today) zToday++; }
   });
-  if (KDV) renderKdSummary(kdx); else $('mapSum').innerHTML = 'ทั้งคลัง: มีของ <b>' + used + '</b> / ' + all + ' Location · วันนี้ <b>' + usedToday + '</b>' +
-    ' &nbsp;|&nbsp; โซน ' + esc(shown.join(' + ')) + ': <b>' + zUsed + '</b> / ' + zAll + ' · วันนี้ <b>' + zToday + '</b>' +
+  if (KDV) renderKdSummary(kdx); else $('mapSum').innerHTML = 'ทั้งคลัง: มีของ <b>' + used + '</b> / ' + all + ' Location · ' + esc(mapRangeLabel()) + ' <b>' + usedToday + '</b>' +
+    ' &nbsp;|&nbsp; โซน ' + esc(shown.join(' + ')) + ': <b>' + zUsed + '</b> / ' + zAll + ' · ' + esc(mapRangeLabel()) + ' <b>' + zToday + '</b>' +
     (MAP.err ? ' <span class="err-text">(อัปเดตไม่ได้: ' + esc(MAP.err) + ')</span>' : '');
 
   function zoneHtml(zone) {
@@ -2332,7 +2375,7 @@ function renderMapGrid() {
         var code = zone + '-' + rk + '-' + b + lv, i = info(code);
         rAll++; if (i.n) rUsed++;
         if (KDV) return kdCellHtml(code, kdx);
-        var show = MAP.mode === 'today' ? i.today : i.n;
+        var show = rng ? i.today : i.n;
         var cls = !show ? 'empty' : (i.today ? 'today' : 'used');
         if (code === S.location) cls += ' cur';
         if (i.last && bkkMs(i.last) >= hotSince) cls += ' hot';
