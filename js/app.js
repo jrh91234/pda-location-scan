@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261119-1428'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261120-1350'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -3391,7 +3391,7 @@ function kdTopHtml() {
       '<button data-kdcolor="age" class="' + (KD.color === 'age' ? 'active' : '') + '">🕒 อายุในช่อง</button></div>' +
       '<button class="btn small' + (KDM.trail ? ' active' : '') + '" id="kdTrail" title="ลูกศร 10 ความเคลื่อนไหว Kingdee ล่าสุด">➜ ความเคลื่อนไหว</button>' +
     '</div>' +
-    '<div id="kdStale"></div><div id="kdRound" class="kd-round"></div><div id="kdPub"></div>' +
+    '<div id="kdStale"></div><div id="kdRound" class="kd-round"></div><div id="kdPub"></div><div id="kdXfer"></div>' +
     '<div class="kdf-bar"><div class="ac-wrap kdf-wrap"><input id="kdfQ" class="field" autocomplete="off" spellcheck="false" enterkeyhint="search" placeholder="สแกน / พิมพ์ รหัส · Lot · ชื่อพาร์ท · Spec" value="' + esc(KDF.q) + '">' +
       '<div id="kdfSug" class="ac-list hidden" role="listbox"></div></div>' +
       '<button class="btn primary" id="kdfCam" title="เปิดกล้องสแกนป้าย">📸 สแกน</button></div>' +
@@ -3433,7 +3433,7 @@ function kdStaleHtml(short) {
 function renderKdSnap() {
   var el = $('kdSnap'); if (!el) return;
   var st = $('kdStale'); if (st) st.innerHTML = kdStaleHtml();
-  renderKdPub();
+  renderKdPub(); renderKdXfer();
   el.innerHTML = KD.loading ? '⏳ กำลังดึงยอด Kingdee…'
     : KD.err ? '<span class="err-text">' + esc(KD.err) + '</span>' + (KD.rows.length ? ' (ใช้ข้อมูลล่าสุดที่มี)' : '')
     : KD.snapshotAt ? 'ยอด Kingdee ณ <b>' + esc(fmtWhen(kdSnapText())) + '</b> · ' + KD.rows.length.toLocaleString() + ' แถว · เช็คอัปเดตทุก 1 นาที' : '';
@@ -3491,6 +3491,7 @@ function kdCellHtml(code, x) {
 }
 // รายการช่องที่ต้องดู (กรองตามสถานะ)
 function renderKdList(x) {
+  renderKdXfer();
   var el = $('kdList'); if (!el) return;
   if (KD.color === 'age') {
     var ah = kdAgeListHtml();
@@ -3638,6 +3639,164 @@ function kdAgeListHtml() {
           (r.y.k ? ' · Kingdee ' + kdFmt(r.y.k.q) + ' ' + esc(r.y.k.unit) : ' · แอปนับได้ ' + (r.y.a.noQty ? '?' : kdFmt(r.y.a.q))) + '</span></span></button>';
     }).join('') + '</div>' + (n > lim ? '<button type="button" class="btn small" id="kdMore">ดูเพิ่ม (อีก ' + (n - lim) + ')</button>' : '') +
     (KD.more ? ' <button type="button" class="btn small" id="kdLess">ย่อ</button>' : '') + '</div>';
+}
+// ======================= รอโอนเข้า Kingdee (ดูอย่างเดียว — ยังไม่ส่งอะไรเข้า Kingdee) =======================
+// กติกา: จับคู่ รหัส + Lot · จำนวน = ผลรวมกล่องที่สแกนในช่อง ลบยอดที่ Kingdee มีอยู่แล้วในช่องนั้น
+// ต้นทาง: Public area ก่อน → ช่องที่แอปไม่เคยสแกนเจอ Lot นี้ → (สุดท้าย) ช่องที่สแกนเจอน้อยกว่า Kingdee · คลังปลายทาง = คลังต้นทาง
+var KDX = { open: false, t: '', zone: '', q: '', per: 'all', n: 40 };
+function kdxTol(q) { return Math.max(0.001, Math.abs(q || 0) * 0.0005); }
+function kdXferCompute() {
+  var items = mapAllItems().filter(function (it) { return !isTestUser(it.by) && it.part; });
+  var key = [KD.rows.length, KD.pub.length, KD.snapshotAt, MAP.itemsSig, items.length, MAP.loadedAt].join('|');
+  if (kdXferCompute.key === key && kdXferCompute.v) return kdXferCompute.v;
+  var A = {}, K = {};
+  items.forEach(function (it) {
+    var g = A[it.part + '|' + it.lot] || (A[it.part + '|' + it.lot] = {});
+    var x = g[it.loc] || (g[it.loc] = { q: 0, n: 0, noQty: 0, unit: it.unit || '', pending: 0 });
+    var q = kdNum(it.qty); if (q == null) x.noQty++; else x.q += q;
+    x.n++; if (it.pending) x.pending++;
+    if (it.at && (!x.at || it.at > x.at)) { x.at = it.at; x.by = it.by; }
+  });
+  KD.rows.concat(KD.pub).forEach(function (r) {
+    var g = K[r[1] + '|' + r[2]] || (K[r[1] + '|' + r[2]] = {}), id = r[0] + '|' + r[7];
+    var e = g[id] || (g[id] = { loc: r[0], wh: r[7], q: 0, unit: r[4], name: r[5], spec: r[6] });
+    e.q += r[3];
+  });
+  var lines = [], chk = [];
+  Object.keys(A).forEach(function (k) {
+    var a = A[k], g = K[k] || {}, kl = Object.keys(g).map(function (id) { return g[id]; });
+    var part = k.split('|')[0], lot = k.slice(part.length + 1), info = kl[0] || bomInfo(part) || {};
+    var base = { part: part, lot: lot, name: info.name || '', spec: info.spec || '', unit: info.unit || (a[Object.keys(a)[0]] || {}).unit || '' };
+    var kAt = {}; kl.forEach(function (e) { kAt[e.loc] = (kAt[e.loc] || 0) + e.q; });
+    var needs = [];
+    Object.keys(a).sort().forEach(function (loc) {
+      var x = a[loc], at = { to: loc, at: x.at, by: x.by, boxes: x.n, pending: x.pending };
+      if (x.noQty) { chk.push(Object.assign({ why: 'noqty', qty: x.q }, base, at)); return; }
+      if (kl.length && info.unit && x.unit && x.unit.toUpperCase() !== String(info.unit).toUpperCase()) {
+        chk.push(Object.assign({ why: 'unit', qty: x.q, aunit: x.unit }, base, at)); return;
+      }
+      var need = x.q - (kAt[loc] || 0);
+      if (need > kdxTol(x.q)) needs.push(Object.assign({ need: need, scanned: x.q }, at));
+    });
+    if (!needs.length) return;
+    if (!kl.length) { needs.forEach(function (n) { chk.push(Object.assign({ why: 'nolot', qty: n.need }, base, n)); }); return; }
+    var pub = kl.filter(function (e) { return e.loc === 'Public area'; });
+    var free = kl.filter(function (e) { return e.loc !== 'Public area' && !a[e.loc]; }).sort(function (p, q) { return q.q - p.q; });
+    var part2 = kl.filter(function (e) { return e.loc !== 'Public area' && a[e.loc] && e.q - a[e.loc].q > kdxTol(e.q); });
+    var src = pub.map(function (e) { return { e: e, left: e.q, type: 'pub' }; })
+      .concat(free.map(function (e) { return { e: e, left: e.q, type: 'bin' }; }))
+      .concat(part2.map(function (e) { return { e: e, left: e.q - a[e.loc].q, type: 'bin', partial: true }; }));
+    needs.forEach(function (n) {
+      var need = n.need;
+      src.forEach(function (s) {
+        if (need <= kdxTol(n.need) || s.left <= kdxTol(s.e.q)) return;
+        var take = Math.min(need, s.left);
+        lines.push(Object.assign({}, base, n, {
+          from: s.e.loc, wh: s.e.wh, qty: take, type: s.type, partial: !!s.partial, unit: s.e.unit || base.unit,
+          defect: /defect|scrap/i.test(s.e.wh)
+        }));
+        s.left -= take; need -= take;
+      });
+      if (need > kdxTol(n.need)) chk.push(Object.assign({ why: 'short', qty: need }, base, n));
+    });
+  });
+  lines.forEach(function (l) { l.hold = l.defect; });
+  kdXferCompute.key = key;
+  return (kdXferCompute.v = { lines: lines, chk: chk });
+}
+function kdxDayOk(at) {
+  if (KDX.per === 'all') return true;
+  var d = workShiftDate(at); if (!d) return false;
+  return KDX.per === 'today' ? d === workDay() : d >= workDay(Date.now() - 6 * 86400000);
+}
+function kdxRows(v) {
+  var q = KDX.q.trim().toUpperCase().split(/\s+/).filter(String);
+  var all = v.lines.map(function (l) { return Object.assign({ kind: l.hold || l.partial ? 'chk' : l.type }, l); })
+    .concat(v.chk.map(function (c) { return Object.assign({ kind: 'chk', review: true }, c); }));
+  return all.filter(function (r) {
+    if (KDX.zone && r.to.split('-')[0] !== KDX.zone) return false;
+    if (!kdxDayOk(r.at)) return false;
+    if (!q.length) return true;
+    var hay = (r.part + ' ' + r.lot + ' ' + r.name + ' ' + r.spec + ' ' + r.to + ' ' + (r.from || '')).toUpperCase();
+    return q.every(function (w) { return hay.indexOf(w) >= 0; });
+  });
+}
+var KDX_WHY = {
+  nolot: '⚠ Kingdee ไม่มี Lot นี้เลย — ไม่ทำใบโอน ต้องตรวจ (รับเข้าไม่ครบ / ป้ายผิด / Lot พิมพ์ผิด)',
+  short: '⚠ สแกนเจอมากกว่าที่ Kingdee มีให้โอน — ส่วนที่ขาด',
+  unit: '⚠ หน่วยไม่ตรงกับ Kingdee',
+  noqty: '⚠ มีกล่องที่ไม่มีจำนวน — ใส่จำนวนก่อน'
+};
+function kdxRowHtml(r) {
+  var u = esc(r.unit || ''), whS = esc(kdPubWhShort(r.wh));
+  var route = r.review ? '<span class="kdx-why">' + KDX_WHY[r.why] + (r.why === 'unit' ? ' (สแกน ' + esc(r.aunit) + ' / Kingdee ' + u + ')' : '') + '</span> → <span class="loc-pill">' + esc(r.to) + '</span>'
+    : (r.type === 'pub' ? '📥 Public area' : '🔁 <span class="loc-pill">' + esc(r.from) + '</span>') + ' → <span class="loc-pill">' + esc(r.to) + '</span> <span class="small muted">' + whS + '</span>';
+  var flags = [];
+  if (r.defect) flags.push('⚠ คลัง Defective / Scrap — ให้คนตรวจก่อน');
+  if (r.partial) flags.push('⚠ ตัดจากช่องที่สแกนเจอ Lot นี้น้อยกว่า Kingdee — อาจยังนับไม่ครบ');
+  if (r.pending) flags.push('⏳ ยังไม่ส่งขึ้นเซิร์ฟเวอร์');
+  return '<div class="kdp-row kdx-row' + (r.kind === 'chk' ? ' kdx-chk' : '') + '"><span class="kdp-main"><b>' + esc(r.part) + '</b> ' + esc(r.name) +
+      (r.spec ? ' <span class="kd-spec">' + esc(r.spec) + '</span>' : '') + '<span class="small muted"> · Lot ' + esc(r.lot || '-') + '</span>' +
+      '<div class="kdx-route">' + route + '</div>' +
+      '<div class="small muted">สแกน ' + r.boxes + ' กล่อง' + (r.scanned != null ? ' รวม ' + kdFmt(r.scanned) : '') + (r.by ? ' · ' + esc(r.by) : '') + (r.at ? ' · ' + esc(kdWhen(r.at)) : '') + '</div>' +
+      (flags.length ? '<div class="small kdx-flag">' + flags.join('<br>') + '</div>' : '') + '</span>' +
+    '<span class="kdp-q"><b>' + kdFmt(r.qty) + '</b> <span class="small muted">' + (r.why === 'unit' ? esc(r.aunit) : u) + '</span></span></div>';
+}
+function renderKdXfer() {
+  var el = $('kdXfer'); if (!el) return;
+  if (!KD.rows.length) { el.innerHTML = ''; return; }
+  if (document.activeElement && document.activeElement.id === 'kdxQ') return; // กำลังพิมพ์กรอง — อย่าวาดทับ
+  var v = kdXferCompute(), nPub = 0, nBin = 0, nChk = v.chk.length;
+  v.lines.forEach(function (l) { if (l.hold || l.partial) nChk++; else if (l.type === 'pub') nPub++; else nBin++; });
+  var head = '<summary>📝 <b>รอโอนเข้า Kingdee</b> — 📥 ' + nPub + ' · 🔁 ' + nBin + ' · ⚠ ' + nChk + ' <span class="small muted">(ดูอย่างเดียว ยังไม่ส่งเข้า Kingdee)</span></summary>';
+  if (!KDX.open) { el.innerHTML = '<details class="kdp kdx" id="kdxD">' + head + '</details>'; bindKdXfer(); return; }
+  var rows = kdxRows(v), cnt = { '': rows.length, pub: 0, bin: 0, chk: 0 }, zones = {};
+  rows.forEach(function (r) { cnt[r.kind]++; });
+  v.lines.concat(v.chk).forEach(function (r) { var z = r.to.split('-')[0]; zones[z] = (zones[z] || 0) + 1; });
+  var shown = rows.filter(function (r) { return !KDX.t || r.kind === KDX.t; });
+  function chip(attr, val, cur, label) { return '<button type="button" class="kda-chip' + (cur === val ? ' on' : '') + '" data-' + attr + '="' + esc(val) + '">' + label + '</button>'; }
+  el.innerHTML = '<details class="kdp kdx" id="kdxD" open>' + head +
+    '<div class="small muted">แอปเทียบของที่สแกนอยู่ในช่องตอนนี้กับยอด Kingdee (รหัส + Lot) · จำนวน = ผลรวมกล่องที่สแกน ลบยอดที่ Kingdee มีในช่องนั้นอยู่แล้ว · ตัดจาก Public area ก่อน · ยังไม่มีปุ่มส่ง</div>' +
+    '<div class="kdp-chips">' + chip('kdxt', '', KDX.t, 'ทั้งหมด ' + cnt['']) + chip('kdxt', 'pub', KDX.t, '📥 จาก Public area ' + cnt.pub) +
+      chip('kdxt', 'bin', KDX.t, '🔁 จากช่องอื่น ' + cnt.bin) + chip('kdxt', 'chk', KDX.t, '⚠ ต้องตรวจ ' + cnt.chk) + '</div>' +
+    '<div class="kdp-chips">' + chip('kdxz', '', KDX.zone, 'ทุกโซน') + Object.keys(zones).sort().map(function (z) { return chip('kdxz', z, KDX.zone, esc(z) + ' ' + zones[z]); }).join('') +
+      '<span class="kdx-sep"></span>' + chip('kdxp', 'all', KDX.per, 'ทุกวัน') + chip('kdxp', 'today', KDX.per, 'สแกนวันนี้') + chip('kdxp', '7d', KDX.per, '7 วัน') + '</div>' +
+    '<div class="kdp-bar"><input id="kdxQ" class="field" placeholder="กรอง รหัส · Lot · ชื่อ · ช่อง" value="' + esc(KDX.q) + '" autocomplete="off">' +
+      '<button type="button" class="btn small" id="kdxXlsx" title="Excel สำหรับตรวจ (ไม่ใช่ไฟล์นำเข้า Kingdee)">⬇ Excel ตรวจ</button></div>' +
+    '<div class="kdp-list">' + (shown.length ? shown.slice(0, KDX.n).map(kdxRowHtml).join('') : '<div class="small muted">ไม่มีรายการ</div>') + '</div>' +
+    (shown.length > KDX.n ? '<button type="button" class="btn small" id="kdxMore">ดูเพิ่ม (เหลือ ' + (shown.length - KDX.n) + ')</button>' : '') +
+  '</details>';
+  bindKdXfer();
+}
+function bindKdXfer() {
+  var d = $('kdxD'); if (!d) return;
+  d.addEventListener('toggle', function () { if (KDX.open !== d.open) { KDX.open = d.open; renderKdXfer(); } });
+  [['kdxt', 't'], ['kdxz', 'zone'], ['kdxp', 'per']].forEach(function (p) {
+    Array.prototype.forEach.call(d.querySelectorAll('[data-' + p[0] + ']'), function (b) {
+      b.onclick = function () { KDX[p[1]] = b.getAttribute('data-' + p[0]); KDX.n = 40; renderKdXfer(); };
+    });
+  });
+  if ($('kdxMore')) $('kdxMore').onclick = function () { KDX.n += 100; renderKdXfer(); };
+  if ($('kdxXlsx')) $('kdxXlsx').onclick = exportKdXfer;
+  var q = $('kdxQ'), tm = 0;
+  if (q) q.addEventListener('input', function () { clearTimeout(tm); tm = setTimeout(function () {
+    KDX.q = q.value; KDX.n = 40; q.blur(); renderKdXfer(); var n = $('kdxQ'); if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); } }, 300); });
+}
+function exportKdXfer() {
+  var rows = kdxRows(kdXferCompute()).filter(function (r) { return !KDX.t || r.kind === KDX.t; });
+  if (!rows.length) { toast('ไม่มีรายการ'); return; }
+  loadScriptOnce(XLSX_URL).then(function () {
+    var wb = XLSX.utils.book_new();
+    var ws = XLSX.utils.json_to_sheet(rows.map(function (r) {
+      return { 'ประเภท': r.review ? 'ต้องตรวจ' : r.type === 'pub' ? 'จาก Public area' : 'จากช่องอื่น', 'รหัส': r.part, 'ชื่อ': r.name, 'Spec': r.spec, 'Lot': r.lot,
+        'คลัง': r.wh || '', 'จากช่อง': r.review ? '' : r.from, 'ไปช่อง': r.to, 'จำนวนโอน': r.qty, 'หน่วย': r.unit,
+        'หมายเหตุ': r.review ? KDX_WHY[r.why].replace(/^⚠ /, '') : [r.defect ? 'คลัง Defective/Scrap' : '', r.partial ? 'ตัดจากช่องที่อาจนับไม่ครบ' : ''].filter(String).join(' · '),
+        'สแกนโดย': r.by || '', 'เวลาสแกน': r.at || '' };
+    }));
+    ws['!cols'] = [14, 14, 28, 16, 12, 30, 12, 12, 10, 6, 36, 12, 16].map(function (w) { return { wch: w }; });
+    XLSX.utils.book_append_sheet(wb, ws, 'รอโอน (ตรวจ)');
+    XLSX.writeFile(wb, 'รอโอนKingdee_ตรวจ_' + workDay() + '.xlsx');
+  }, function () { toast('โหลดตัวสร้าง Excel ไม่ได้ (ต้องต่ออินเทอร์เน็ต)', 3000); });
 }
 // ======================= Public area (ของที่ Kingdee ยังไม่ได้ลงช่อง) =======================
 var KDP = { open: false, wh: '', n: 50, q: '' };

@@ -604,3 +604,9 @@ main.view-kd > .map-top, .map-top.tall { position: static; }
 .kdf-pub { margin-top: 6px; padding: 6px 8px; background: #f5f3ff; border-radius: 8px; }
 .kdp-chips .kda-chip { background: #fff; border-color: #d0d5dd; color: #344054; padding: 3px 8px; font-size: 13px; cursor: pointer; }
 .kdp-chips .kda-chip.on { background: #6941c6; border-color: #6941c6; color: #fff; }
+.kdx { background: #ecfdf3; border-color: #abefc6; }
+.kdx-route { margin: 2px 0; }
+.kdx-chk { background: #fffaeb; }
+.kdx-why { color: #b54708; }
+.kdx-flag { color: #b54708; }
+.kdx-sep { width: 8px; }
