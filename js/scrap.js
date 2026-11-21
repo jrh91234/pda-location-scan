@@ -1,10 +1,11 @@
 // ======================= Scrap — พาเลทเศษวัสดุ =======================
 // สร้างพาเลท (เลขพาเลท = วันที่-ลำดับ เช่น 11062026-1 ออกโดยเซิร์ฟเวอร์) · น้ำหนัก kg · รูปหลายรูป (ใช้ระบบรูปเดียวกับหน้าสแกน)
-// สถานะ: เปิดอยู่ → ปิดพาเลท (ชั่งแล้ว) → ขายแล้ว (ขายทีละพาเลท หรือหลายพาเลทพร้อมกัน + ใบส่งของ) · พาเลทที่ขายแล้วถูกล็อก
+// สถานะ: Stock (อยู่ในโรงงาน) → ขายแล้ว (ขายทีละพาเลท หรือหลายพาเลทพร้อมกัน + ใบส่งของ) · พาเลทที่ขายแล้วถูกล็อก
 // แผนก: dropdown จากชีต Departments · Export Excel / PDF (รายงาน, ใบพาเลท, ป้ายพาเลทพร้อม QR, ใบส่งของ)
 
 var SCRAP_TYPES = ['เหล็ก', 'สแตนเลส', 'ทองแดง', 'อลูมิเนียม', 'พลาสติก', 'กระดาษ/ลัง', 'ไม้/พาเลท', 'ชิ้นงานเสีย (NG)', 'อื่นๆ'];
-var SCRAP_ST = { open: ['เปิดอยู่', 'pending'], closed: ['ปิดแล้ว', 'saved'], shipped: ['ขายแล้ว', 'shipped'], deleted: ['ลบแล้ว', 'deleted'] };
+// open / closed = สถานะเดิมก่อนรวมเป็น Stock (ยังเห็นในประวัติเก่า)
+var SCRAP_ST = { stock: ['Stock', 'saved'], shipped: ['ขายแล้ว', 'shipped'], deleted: ['ลบแล้ว', 'deleted'], open: ['Stock (เปิด)', 'saved'], closed: ['Stock (ปิด)', 'saved'] };
 var SCRAP_WEIGHT_REASONS = ['ชั่งใหม่', 'กรอกผิด', 'เพิ่ม/เอาของออกจากพาเลท', 'อื่นๆ'];
 var SCRAP_DELETE_REASONS = ['สร้างซ้ำ', 'สร้างผิด', 'รวมกับพาเลทอื่น', 'อื่นๆ'];
 var SCRAP_ID_RE = /^\d{8}-\d+$/;
@@ -25,7 +26,7 @@ function scrapTypes() { // ประเภทมาตรฐาน + ที่�
 // ข้อมูลสำหรับระบบรูป (openPhotos ใช้ scan_id / part_code / location / photos ของ row)
 function scrapDecorate(r) { r.scan_id = r.pallet_id; r.part_code = 'พาเลท ' + r.pallet_id; r.location = ''; r.photos = r.photos || []; return r; }
 function scrapRowOf(id) { return SC.data && SC.data.rows.filter(function (x) { return x.pallet_id === id; })[0] || null; }
-function scrapStTag(st) { var s = SCRAP_ST[st] || SCRAP_ST.open; return '<span class="tag ' + s[1] + '">' + s[0] + '</span>'; }
+function scrapStTag(st) { var s = SCRAP_ST[st] || SCRAP_ST.stock; return '<span class="tag ' + s[1] + '">' + s[0] + '</span>'; }
 
 // ---------- หน้า Scrap ----------
 function renderScrap() {
@@ -43,7 +44,7 @@ function renderScrap() {
       '<div class="seg quick-seg">' + [['today', 'วันนี้'], ['yesterday', 'เมื่อวาน'], ['7', '7 วัน'], ['month', 'เดือนนี้'], ['all', 'ทั้งหมด']].map(function (o) {
         return '<button type="button" data-scq="' + o[0] + '" class="' + (scrapQuickOf(f) === o[0] ? 'active' : '') + '">' + o[1] + '</button>';
       }).join('') + '</div>' +
-      '<div class="seg span2">' + [['', 'ทุกสถานะ'], ['open', 'เปิดอยู่'], ['closed', 'ปิดแล้ว'], ['shipped', 'ขายแล้ว']].map(function (o) {
+      '<div class="seg span2">' + [['', 'ทุกสถานะ'], ['stock', '📦 Stock'], ['shipped', '🚚 ขายแล้ว']].map(function (o) {
         return '<button type="button" data-scst="' + o[0] + '" class="' + (f.status === o[0] ? 'active' : '') + '">' + o[1] + '</button>';
       }).join('') + '</div>' +
       '<select id="scType" class="field"><option value="">ทุกประเภท</option>' + scrapTypes().map(function (t) {
@@ -137,15 +138,14 @@ function renderScrapList() {
   var types = Object.keys(d.byType).sort(function (a, b) { return d.byType[b].kg - d.byType[a].kg; });
   var maxKg = types.reduce(function (m, k) { return Math.max(m, d.byType[k].kg); }, 0) || 1;
   var kg1 = function (v) { return esc(Number(v || 0).toLocaleString('en-US', { maximumFractionDigits: 1 })); };
-  var st = d.stock || { n: 0, kg: 0, noWeight: 0, closed: 0, closedKg: 0, byType: {} };
+  var st = d.stock || { n: 0, kg: 0, noWeight: 0, ready: 0, byType: {} };
   var stTypes = Object.keys(st.byType || {}).sort(function (a, b) { return st.byType[b].kg - st.byType[a].kg; });
   el.innerHTML =
-    '<div class="stock-card"><div class="stock-h">🏭 คงเหลือในโรงงาน <span class="muted small">ยังไม่ขาย · ทุกวันที่</span></div>' +
+    '<div class="stock-card"><div class="stock-h">📦 Stock ในโรงงาน <span class="muted small">ยังไม่ขาย · ทุกวันที่</span></div>' +
       '<div class="stock-n"><b>' + kg1(st.kg) + '</b> kg · <b>' + st.n + '</b> พาเลท</div>' +
-      '<div class="small">พร้อมขาย (ปิดแล้ว) <b>' + st.closed + '</b> พาเลท · ' + kg1(st.closedKg) + ' kg' +
-        (st.noWeight ? ' · <span class="warn-text small">ยังไม่ชั่ง ' + st.noWeight + '</span>' : '') + '</div>' +
+      (st.noWeight ? '<div class="small"><span class="warn-text small">ยังไม่ชั่ง ' + st.noWeight + ' พาเลท</span> (ต้องใส่น้ำหนักก่อนขาย)</div>' : '') +
       (stTypes.length ? '<div class="stock-types">' + stTypes.map(function (k) { return '<span>' + esc(k) + ' <b>' + kg1(st.byType[k].kg) + '</b> kg</span>'; }).join('') + '</div>' : '') +
-      '<button class="btn warn" id="scShipMany"' + (st.closed ? '' : ' disabled') + '>🚚 ขายหลายพาเลท' + (st.closed ? ' (' + st.closed + ' พร้อมขาย)' : '') + '</button>' +
+      '<button class="btn warn" id="scShipMany"' + (st.ready ? '' : ' disabled') + '>🚚 ขายหลายพาเลท' + (st.ready ? ' (' + st.ready + ' พาเลทขายได้)' : '') + '</button>' +
     '</div>' +
     '<div class="stats"><div><b>' + d.total + '</b><span>พาเลท (ตามตัวกรอง)</span></div><div><b>' + kg1(d.totalKg) + '</b><span>kg รวม</span></div>' +
       '<div><b>' + kg1((d.kgByStatus || {}).shipped) + '</b><span>kg ขายแล้ว</span></div></div>' +
@@ -158,7 +158,7 @@ function renderScrapList() {
       (d.rows.length < d.total ? '<p class="muted small">แสดง ' + d.rows.length + ' พาเลทล่าสุด</p>' : '') +
       d.rows.map(function (r) {
         var del = r.status === 'deleted';
-        return '<div class="row scrap-row st-' + (del ? 'deleted' : r.status === 'open' ? 'pending' : 'saved') + '">' +
+        return '<div class="row scrap-row st-' + (del ? 'deleted' : r.status === 'shipped' ? 'shipped' : r.weight_kg === '' ? 'pending' : 'saved') + '">' +
           '<div class="row-main" data-scopen="' + esc(r.pallet_id) + '">' +
             '<div class="row-top"><b class="pallet-id">' + esc(r.pallet_id) + '</b>' + scrapStTag(r.status) + '</div>' +
             '<div class="row-sub"><span class="loc-pill">' + esc(r.scrap_type || '-') + '</span>' + (r.department ? '<span class="dept-pill">' + esc(r.department) + '</span>' : '') +
@@ -300,11 +300,10 @@ function openScrapDetail(idOrRow, isNew) {
         (r.weight_original !== '' && r.weight_original !== r.weight_kg ? ' <span class="muted small">(เดิม ' + esc(scrapFmtKg(r.weight_original)) + ')</span>' : '')) +
       line('หมายเหตุ', esc(r.note)) +
       line('สร้าง', esc(r.created_by) + ' · ' + esc(r.created_at) + (r.device ? ' · ' + esc(r.device) : '')) +
-      (r.closed_at ? line('ปิดพาเลท', esc(r.closed_by) + ' · ' + esc(r.closed_at)) : '') +
       (r.shipped_at ? line('ขาย', esc(r.shipped_by) + ' · ' + esc(r.shipped_at) + (r.ship_ref ? ' · 📄 ' + esc(r.ship_ref) : '')) : '') +
       (del ? line('ลบ', esc(r.deleted_by) + ' · ' + esc(r.deleted_at) + ' · ' + esc(r.delete_reason)) : '') +
     '</div>' +
-    (sold ? '<div class="msg warn small">🔒 ขายแล้ว — แก้น้ำหนัก / ข้อมูล / ลบไม่ได้ (ถ้าจำเป็นให้กด "เปิดใหม่")</div>' : '') +
+    (sold ? '<div class="msg warn small">🔒 ขายแล้ว — แก้น้ำหนัก / ข้อมูล / ลบไม่ได้ (ถ้าจำเป็นให้กด "ยกเลิกการขาย")</div>' : '') +
     (del ? '' :
       '<div class="actions wrap">' +
         '<button class="btn primary" id="sdCam">📷 ถ่ายรูป</button>' +
@@ -313,9 +312,7 @@ function openScrapDetail(idOrRow, isNew) {
           '<button class="btn" id="sdEdit">✏️ แก้ข้อมูล</button>') +
       '</div>' +
       '<div class="actions wrap">' +
-        (r.status === 'open' ? '<button class="btn warn" id="sdClose">🔒 ปิดพาเลท</button>' : '') +
-        (r.status === 'closed' ? '<button class="btn warn" id="sdShip">🚚 ขาย / ส่งออก</button>' : '') +
-        (r.status !== 'open' ? '<button class="btn" id="sdReopen">🔓 เปิดใหม่</button>' : '') +
+        (sold ? '<button class="btn" id="sdReopen">↩️ ยกเลิกการขาย (คืนเข้า Stock)</button>' : '<button class="btn warn" id="sdShip">🚚 ขาย / ส่งออก</button>') +
       '</div>') +
     '<div class="actions wrap">' +
       '<button class="btn" id="sdLabel">🏷 ป้ายพาเลท (PDF)</button>' +
@@ -337,13 +334,12 @@ function openScrapDetail(idOrRow, isNew) {
   if ($('sdWeight')) $('sdWeight').onclick = function () { editScrapWeight(r); };
   if ($('sdEdit')) $('sdEdit').onclick = function () { editScrapInfo(r); };
   if ($('sdDel')) $('sdDel').onclick = function () { deleteScrapUi(r); };
-  if ($('sdClose')) $('sdClose').onclick = function () {
-    if (r.weight_kg === '') { toast('ต้องใส่น้ำหนักก่อนปิดพาเลท'); editScrapWeight(r, 'closed'); return; }
-    scrapSetStatusUi(r, 'closed');
+  if ($('sdShip')) $('sdShip').onclick = function () {
+    if (r.weight_kg === '') { toast('ต้องใส่น้ำหนักก่อนขาย'); editScrapWeight(r, 'ship'); return; }
+    openScrapShip(r);
   };
-  if ($('sdShip')) $('sdShip').onclick = function () { openScrapShip(r); };
   if ($('sdReopen')) $('sdReopen').onclick = function () {
-    confirmModal('เปิดพาเลท ' + esc(r.pallet_id) + ' ใหม่?', 'สถานะจะกลับเป็น "เปิดอยู่" (ข้อมูลการปิด/ขายจะถูกล้าง' + (sold ? ' และพาเลทนี้จะหลุดออกจากใบส่งของเดิม' : '') + ' แต่ยังอยู่ในประวัติ)', 'เปิดใหม่', function () { scrapSetStatusUi(r, 'open'); });
+    confirmModal('ยกเลิกการขาย ' + esc(r.pallet_id) + '?', 'พาเลทจะกลับเข้า Stock และหลุดออกจากใบส่งของเดิม (ข้อมูลการขายจะถูกล้าง แต่ยังอยู่ในประวัติ)', 'คืนเข้า Stock', function () { scrapSetStatusUi(r, 'stock'); });
   };
 }
 
@@ -371,7 +367,7 @@ function editScrapWeight(r, thenStatus) {
     (has ? '<label>เหตุผล</label>' + SCRAP_WEIGHT_REASONS.map(function (x, i) {
       return '<label class="radio"><input type="radio" name="swWhy" value="' + esc(x) + '"' + (i === 0 ? ' checked' : '') + '> ' + esc(x) + '</label>';
     }).join('') + '<input id="swNote" class="field" placeholder="รายละเอียด (ถ้ามี)">' : '') +
-    '<div class="actions"><button class="btn" id="mCancel">ยกเลิก</button><button class="btn primary" id="mOk">' + (thenStatus === 'closed' ? 'บันทึก + ปิดพาเลท' : 'บันทึก') + '</button></div>');
+    '<div class="actions"><button class="btn" id="mCancel">ยกเลิก</button><button class="btn primary" id="mOk">' + (thenStatus === 'ship' ? 'บันทึก แล้วไปขาย' : 'บันทึก') + '</button></div>');
   var inp = $('swKg'); setTimeout(function () { inp.focus(); inp.select(); }, 50);
   inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); $('mOk').click(); } });
   $('mCancel').onclick = function () { openScrapDetail(r); };
@@ -386,7 +382,7 @@ function editScrapWeight(r, thenStatus) {
     var btn = $('mOk'); btn.disabled = true;
     api('scrapUpdate', r.pallet_id, { weight_kg: v }, S.user, why).then(function (rec) {
       rec = scrapApply(rec); rec.photos = r.photos;
-      if (thenStatus) { scrapSetStatusUi(rec, thenStatus); return; }
+      if (thenStatus === 'ship') { renderScrapList(); openScrapShip(rec); return; }
       toast('บันทึกน้ำหนัก ' + scrapFmtKg(rec.weight_kg));
       renderScrapList(); openScrapDetail(rec);
     }, function (err) { btn.disabled = false; toast(err.message, 3500); });
@@ -420,7 +416,7 @@ function scrapSetStatusUi(r, status, opt) {
   api('scrapSetStatus', r.pallet_id, status, S.user, opt || {}).then(function (rec) {
     rec = scrapApply(rec); rec.photos = r.photos;
     beep(true);
-    toast(status === 'closed' ? '🔒 ปิดพาเลท ' + rec.pallet_id + ' แล้ว' : status === 'shipped' ? '🚚 บันทึกขายแล้ว' : 'เปิดพาเลทใหม่แล้ว', 2500);
+    toast(status === 'shipped' ? '🚚 บันทึกขายแล้ว' : '↩️ คืนเข้า Stock แล้ว', 2500);
     renderScrapList(); openScrapDetail(rec);
   }, function (err) { beep(false); toast(err.message, 3500); });
 }
@@ -485,13 +481,13 @@ function exportScrapExcel() {
       return { 'เลขพาเลท': r.pallet_id, 'วันที่พาเลท': scrapDay(r.pallet_date), 'ลำดับ': r.seq, 'แผนก': r.department, 'ประเภท': r.scrap_type, 'ที่มา': r.source,
         'น้ำหนัก (kg)': r.weight_kg, 'น้ำหนักเดิม (kg)': r.weight_original !== r.weight_kg ? r.weight_original : '', 'สถานะ': (SCRAP_ST[r.status] || [r.status])[0],
         'หมายเหตุ': r.note, 'ผู้สร้าง': r.created_by, 'สร้างเมื่อ': r.created_at, 'เครื่อง': r.device,
-        'ปิดโดย': r.closed_by, 'ปิดเมื่อ': r.closed_at, 'ขายโดย': r.shipped_by, 'ขายเมื่อ': r.shipped_at, 'เอกสาร/ผู้รับซื้อ': r.ship_ref, 'ชุดใบส่งของ': r.ship_batch,
+        'ขายโดย': r.shipped_by, 'ขายเมื่อ': r.shipped_at, 'เอกสาร/ผู้รับซื้อ': r.ship_ref, 'ชุดใบส่งของ': r.ship_batch,
         'แก้ไขล่าสุดโดย': r.updated_by, 'แก้ไขล่าสุดเมื่อ': r.updated_at, 'ลบโดย': r.deleted_by, 'ลบเมื่อ': r.deleted_at, 'เหตุผลลบ': r.delete_reason,
         'จำนวนรูป': (r.photos || []).length, 'ลิงก์รูป (Google Drive)': (r.photo_urls || []).join(' \n') };
     });
     var wb = XLSX.utils.book_new();
     var ws = XLSX.utils.json_to_sheet(rows);
-    ws['!cols'] = [13, 11, 6, 18, 16, 18, 11, 11, 11, 24, 14, 19, 10, 14, 19, 14, 19, 18, 26, 14, 19, 12, 19, 16, 8, 60].map(function (w) { return { wch: w }; });
+    ws['!cols'] = [13, 11, 6, 18, 16, 18, 11, 11, 11, 24, 14, 19, 10, 14, 19, 18, 26, 14, 19, 12, 19, 16, 8, 60].map(function (w) { return { wch: w }; });
     ws['!autofilter'] = { ref: ws['!ref'] };
     XLSX.utils.book_append_sheet(wb, ws, 'พาเลท');
 
@@ -500,8 +496,8 @@ function exportScrapExcel() {
     live.forEach(function (r) {
       var dp = byDept[r.department || '-'] || (byDept[r.department || '-'] = { n: 0, kg: 0, sold: 0, stock: 0 });
       dp.n++; dp.kg += r.weight_kg || 0; if (r.status === 'shipped') dp.sold += r.weight_kg || 0; else dp.stock += r.weight_kg || 0;
-      var t = byType[r.scrap_type || '-'] || (byType[r.scrap_type || '-'] = { n: 0, kg: 0, nw: 0, open: 0, closed: 0, shipped: 0 });
-      t.n++; t[r.status] = (t[r.status] || 0) + 1;
+      var t = byType[r.scrap_type || '-'] || (byType[r.scrap_type || '-'] = { n: 0, kg: 0, nw: 0, stock: 0, shipped: 0, stockKg: 0, shippedKg: 0 });
+      t.n++; t[r.status] = (t[r.status] || 0) + 1; t[r.status + 'Kg'] = (t[r.status + 'Kg'] || 0) + (r.weight_kg || 0);
       if (r.weight_kg === '') t.nw++; else t.kg += r.weight_kg;
       var k = r.pallet_date + '|' + (r.scrap_type || '-');
       var dd = byDay[k] || (byDay[k] = { day: r.pallet_date, type: r.scrap_type || '-', n: 0, kg: 0 });
@@ -510,14 +506,14 @@ function exportScrapExcel() {
     var r3 = function (x) { return Math.round(x * 1000) / 1000; };
     var trows = Object.keys(byType).sort().map(function (k) {
       var t = byType[k];
-      return { 'ประเภท': k, 'จำนวนพาเลท': t.n, 'น้ำหนักรวม (kg)': r3(t.kg), 'ยังไม่ชั่ง': t.nw, 'เปิดอยู่': t.open || 0, 'ปิดแล้ว': t.closed || 0, 'ขายแล้ว': t.shipped || 0 };
+      return { 'ประเภท': k, 'จำนวนพาเลท': t.n, 'น้ำหนักรวม (kg)': r3(t.kg), 'ยังไม่ชั่ง': t.nw, 'Stock (พาเลท)': t.stock || 0, 'Stock (kg)': r3(t.stockKg || 0), 'ขายแล้ว (พาเลท)': t.shipped || 0, 'ขายแล้ว (kg)': r3(t.shippedKg || 0) };
     });
     trows.push({ 'ประเภท': 'รวม', 'จำนวนพาเลท': live.length, 'น้ำหนักรวม (kg)': r3(live.reduce(function (s, r) { return s + (r.weight_kg || 0); }, 0)),
       'ยังไม่ชั่ง': live.filter(function (r) { return r.weight_kg === ''; }).length });
     var ws2 = XLSX.utils.json_to_sheet(trows);
-    ws2['!cols'] = [18, 12, 15, 10, 9, 9, 11].map(function (w) { return { wch: w }; });
+    ws2['!cols'] = [18, 12, 15, 10, 13, 11, 15, 13].map(function (w) { return { wch: w }; });
     XLSX.utils.book_append_sheet(wb, ws2, 'สรุปตามประเภท');
-    var prow = Object.keys(byDept).sort().map(function (k) { var x = byDept[k]; return { 'แผนก': k, 'จำนวนพาเลท': x.n, 'น้ำหนักรวม (kg)': r3(x.kg), 'ขายแล้ว (kg)': r3(x.sold), 'ยังไม่ขาย (kg)': r3(x.stock) }; });
+    var prow = Object.keys(byDept).sort().map(function (k) { var x = byDept[k]; return { 'แผนก': k, 'จำนวนพาเลท': x.n, 'น้ำหนักรวม (kg)': r3(x.kg), 'Stock (kg)': r3(x.stock), 'ขายแล้ว (kg)': r3(x.sold) }; });
     var wsD = XLSX.utils.json_to_sheet(prow);
     wsD['!cols'] = [24, 12, 15, 13, 14].map(function (w) { return { wch: w }; });
     XLSX.utils.book_append_sheet(wb, wsD, 'สรุปตามแผนก');
@@ -606,7 +602,6 @@ function scrapInfoTable(r) {
     tr('น้ำหนัก', r.weight_kg === '' ? 'ยังไม่ชั่ง' : '<b style="font-size:15px">' + esc(scrapFmtKg(r.weight_kg)) + '</b>' + (r.weight_original !== '' && r.weight_original !== r.weight_kg ? ' (เดิม ' + esc(scrapFmtKg(r.weight_original)) + ')' : '')) +
     tr('สถานะ', esc((SCRAP_ST[r.status] || [r.status])[0])) + tr('หมายเหตุ', esc(r.note)) +
     tr('สร้าง', esc(r.created_by) + ' · ' + esc(r.created_at)) +
-    (r.closed_at ? tr('ปิดพาเลท', esc(r.closed_by) + ' · ' + esc(r.closed_at)) : '') +
     (r.shipped_at ? tr('ขาย', esc(r.shipped_by) + ' · ' + esc(r.shipped_at) + (r.ship_ref ? ' · ' + esc(r.ship_ref) : '')) : '') + '</table>';
 }
 
@@ -656,29 +651,30 @@ function scrapPalletPdf(r, btn) {
 // ---------- ขายหลายพาเลทพร้อมกัน ----------
 function openScrapShipMany() {
   if (!S.user) { openUserModal(); return; }
-  openModal('<h3>🚚 ขายหลายพาเลท</h3><div id="smOut" class="center muted pad">กำลังโหลดพาเลทที่ปิดแล้ว…</div>' +
+  openModal('<h3>🚚 ขายหลายพาเลท</h3><div id="smOut" class="center muted pad">กำลังโหลด Stock…</div>' +
     '<div class="actions"><button class="btn" id="mCancel">ยกเลิก</button></div>');
   $('mCancel').onclick = closeModal;
-  api('scrapList', { status: 'closed', limit: 2000 }).then(function (d) {
+  api('scrapList', { status: 'stock', limit: 2000 }).then(function (d) {
     if (!$('smOut')) return;
     var rows = d.rows.slice().reverse(); // เก่าก่อน (ขายของเก่าก่อน)
-    if (!rows.length) { $('smOut').className = 'empty-list muted'; $('smOut').textContent = 'ไม่มีพาเลทที่ปิดแล้ว (พร้อมขาย)'; return; }
-    var types = {}; rows.forEach(function (r) { types[r.scrap_type || '-'] = 1; });
+    if (!rows.length) { $('smOut').className = 'empty-list muted'; $('smOut').textContent = 'ไม่มีพาเลทใน Stock'; return; }
+    var types = {}; rows.forEach(function (r) { if (r.weight_kg !== '') types[r.scrap_type || '-'] = 1; });
     var sh = $('modal').querySelector('.sheet');
     sh.innerHTML = '<h3>🚚 ขายหลายพาเลท</h3>' +
-      '<p class="muted small">เลือกพาเลทที่ "ปิดแล้ว" ที่จะขายพร้อมกัน → ได้ใบส่งของ (PDF) ใบเดียว · พาเลทที่ขายแล้วจะถูกล็อก</p>' +
+      '<p class="muted small">เลือกพาเลทใน Stock ที่จะขายพร้อมกัน (พาเลทที่ยังไม่ชั่งต้องใส่น้ำหนักก่อน) → ได้ใบส่งของ (PDF) ใบเดียว · พาเลทที่ขายแล้วจะถูกล็อก</p>' +
       '<div class="seg"><button type="button" data-smt="*">เลือกทั้งหมด</button><button type="button" data-smt="">ไม่เลือก</button>' +
         Object.keys(types).sort().map(function (t) { return '<button type="button" data-smt="' + esc(t) + '">+ ' + esc(t) + '</button>'; }).join('') + '</div>' +
       '<div class="sm-list">' + rows.map(function (r) {
-        return '<label class="sm-item"><input type="checkbox" data-smid="' + esc(r.pallet_id) + '" data-kg="' + (r.weight_kg || 0) + '" data-type="' + esc(r.scrap_type || '-') + '">' +
+        var nw = r.weight_kg === '';
+        return '<label class="sm-item' + (nw ? ' sm-off' : '') + '"><input type="checkbox" data-smid="' + esc(r.pallet_id) + '" data-kg="' + (r.weight_kg || 0) + '" data-type="' + esc(r.scrap_type || '-') + '"' + (nw ? ' disabled' : '') + '>' +
           '<span class="sm-main"><b>' + esc(r.pallet_id) + '</b> <span class="loc-pill">' + esc(r.scrap_type || '-') + '</span>' +
-          (r.department ? ' <span class="dept-pill">' + esc(r.department) + '</span>' : '') + '<br><span class="muted small">ปิด ' + esc(String(r.closed_at).slice(0, 16)) + '</span></span>' +
-          '<span class="sm-kg">' + esc(scrapFmtKg(r.weight_kg)) + '</span></label>';
+          (r.department ? ' <span class="dept-pill">' + esc(r.department) + '</span>' : '') + '<br><span class="muted small">สร้าง ' + esc(String(r.created_at).slice(0, 16)) + '</span></span>' +
+          '<span class="sm-kg">' + (nw ? '<span class="warn-text small">ยังไม่ชั่ง</span>' : esc(scrapFmtKg(r.weight_kg))) + '</span></label>';
       }).join('') + '</div>' +
       '<div class="sm-sum" id="smSum"></div>' +
       '<label>เลขที่เอกสาร / ผู้รับซื้อ</label><input id="smRef" class="field" autocomplete="off" placeholder="เช่น INV-0001 / ร้าน ก.">' +
       '<div class="actions"><button class="btn" id="mCancel">ยกเลิก</button><button class="btn primary" id="mOk" disabled>ยืนยันขาย</button></div>';
-    var boxes = Array.prototype.slice.call(sh.querySelectorAll('[data-smid]'));
+    var boxes = Array.prototype.slice.call(sh.querySelectorAll('[data-smid]:not([disabled])'));
     function sum() {
       var sel = boxes.filter(function (b) { return b.checked; }), kg = sel.reduce(function (t, b) { return t + Number(b.getAttribute('data-kg')); }, 0);
       $('smSum').innerHTML = 'เลือก <b>' + sel.length + '</b> / ' + boxes.length + ' พาเลท · รวม <b>' + esc(scrapFmtKg(Math.round(kg * 1000) / 1000) || '0 kg') + '</b>';
@@ -800,7 +796,7 @@ function scrapReportPages(f, d, rows, ph) {
   var filt = [scrapRangeText(f), f.status ? 'สถานะ: ' + SCRAP_ST[f.status][0] : '', f.type ? 'ประเภท: ' + f.type : '', f.q ? 'ค้นหา: ' + f.q : ''].filter(String).join(' · ');
   var head = '<div class="hd"><div><h1>รายงาน Scrap</h1><div class="mut">' + esc(filt) + '</div></div><div class="mut" style="text-align:right">พิมพ์ ' + esc(scrapNowText()) + '<br>โดย ' + esc(S.user) + '</div></div>';
   var summary = '<div class="kpi"><div>จำนวนพาเลท<b>' + d.total + '</b></div><div>น้ำหนักรวม<b>' + esc(scrapFmtKg(d.totalKg) || '0 kg') + '</b></div>' +
-      '<div>ยังไม่ชั่ง<b>' + d.noWeight + '</b></div><div>เปิด / ปิด / ขาย<b>' + (d.byStatus.open || 0) + ' / ' + (d.byStatus.closed || 0) + ' / ' + (d.byStatus.shipped || 0) + '</b></div></div>' +
+      '<div>ยังไม่ชั่ง<b>' + d.noWeight + '</b></div><div>Stock / ขายแล้ว (kg)<b>' + esc(Number((d.kgByStatus || {}).stock || 0).toLocaleString('en-US', { maximumFractionDigits: 1 })) + ' / ' + esc(Number((d.kgByStatus || {}).shipped || 0).toLocaleString('en-US', { maximumFractionDigits: 1 })) + '</b></div></div>' +
     '<h2>สรุปตามประเภท</h2><table><tr><th>ประเภท</th><th class="n">พาเลท</th><th class="n">น้ำหนัก (kg)</th><th class="n">สัดส่วน</th></tr>' +
       types.map(function (k) { var t = d.byType[k]; return '<tr><td>' + esc(k) + '</td><td class="n">' + t.n + '</td><td class="n">' + esc(Number(t.kg).toLocaleString('en-US', { maximumFractionDigits: 3 })) + '</td><td class="n">' + (d.totalKg ? Math.round(t.kg / d.totalKg * 1000) / 10 : 0) + '%</td></tr>'; }).join('') +
       '<tr class="tot"><td>รวม</td><td class="n">' + d.total + '</td><td class="n">' + esc(Number(d.totalKg).toLocaleString('en-US', { maximumFractionDigits: 3 })) + '</td><td class="n">100%</td></tr></table>';
