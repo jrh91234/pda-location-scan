@@ -21,7 +21,7 @@ const API_ACTIONS = { ping: ping, saveScans: saveScans, listScans: listScans, de
   getCountState: getCountState, setCountRound: setCountRound, markBinCounted: markBinCounted, getKingdeeMoves: getKingdeeMoves, getBinAges: getBinAges,
   getCountProfile: getCountProfile, saveCountProfile: saveCountProfile, saveCountSample: saveCountSample,
   scrapCreate: scrapCreate, scrapList: scrapList, scrapGet: scrapGet, scrapUpdate: scrapUpdate, scrapSetStatus: scrapSetStatus,
-  scrapDelete: scrapDelete, scrapTimeline: scrapTimeline };
+  scrapDelete: scrapDelete, scrapTimeline: scrapTimeline, scrapShipMany: scrapShipMany, scrapDepartments: scrapDepartments, scrapAddDepartment: scrapAddDepartment };
 
 function doPost(e) {
   let out;
@@ -54,6 +54,7 @@ function setupFromMenu() {
   photoSheet_();
   logSheet_();
   scrapSheet_();
+  deptSheet_();
   const folder = photoFolder_(); // ขอสิทธิ์ Google Drive สำหรับเก็บรูป
   SpreadsheetApp.getUi().alert('พร้อมใช้งาน: ชีต "' + SHEET_NAME + '", "' + PHOTO_SHEET + '" และโฟลเดอร์รูป "' + folder.getName() + '"');
 }
@@ -1099,8 +1100,8 @@ function saveCountSample(p) {
 const SCRAP_SHEET = 'Scrap';
 const SCRAP_HEADERS = ['pallet_id', 'pallet_date', 'seq', 'created_at', 'created_by', 'device', 'scrap_type', 'source', 'weight_kg', 'note',
                        'status', 'updated_by', 'updated_at', 'weight_original', 'closed_by', 'closed_at', 'shipped_by', 'shipped_at', 'ship_ref',
-                       'deleted_by', 'deleted_at', 'delete_reason', 'client_id'];
-const SCRAP_TEXT_COLS = ['pallet_id', 'pallet_date', 'created_by', 'device', 'scrap_type', 'source', 'note', 'ship_ref', 'client_id'];
+                       'deleted_by', 'deleted_at', 'delete_reason', 'client_id', 'department', 'ship_batch'];
+const SCRAP_TEXT_COLS = ['pallet_id', 'pallet_date', 'created_by', 'device', 'scrap_type', 'source', 'note', 'ship_ref', 'client_id', 'department', 'ship_batch'];
 const SCRAP_LOG_SHEET = 'ScrapLog';
 const SCRAP_LOG_HEADERS = ['at', 'pallet_id', 'event', 'by', 'field', 'from', 'to', 'note', 'ref'];
 const SCRAP_STATUS = { open: 1, closed: 1, shipped: 1 };
@@ -1140,7 +1141,8 @@ function scrapToClient_(o) {
     status: String(o.status || 'open'), updated_by: String(o.updated_by || ''), updated_at: fmt_(o.updated_at),
     weight_original: scrapNum_(o.weight_original), closed_by: String(o.closed_by || ''), closed_at: fmt_(o.closed_at),
     shipped_by: String(o.shipped_by || ''), shipped_at: fmt_(o.shipped_at), ship_ref: String(o.ship_ref || ''),
-    deleted_by: String(o.deleted_by || ''), deleted_at: fmt_(o.deleted_at), delete_reason: String(o.delete_reason || '')
+    deleted_by: String(o.deleted_by || ''), deleted_at: fmt_(o.deleted_at), delete_reason: String(o.delete_reason || ''),
+    department: String(o.department || ''), ship_batch: String(o.ship_batch || '')
   };
 }
 
@@ -1187,6 +1189,8 @@ function scrapCreate(p) {
   if (!by) throw new Error('กรุณาระบุชื่อผู้สร้าง');
   const weight = scrapWeight_(p.weight_kg);
   const clientId = clean_(p.client_id, 64);
+  const dept = clean_(p.department, 80);
+  if (!dept) throw new Error('กรุณาเลือกแผนก');
   return scrapLocked_(function (sh) {
     const rows = scrapRead_(sh);
     if (clientId) {
@@ -1204,10 +1208,10 @@ function scrapCreate(p) {
     const id = Utilities.formatDate(now, TZ, 'ddMMyyyy') + '-' + seq;
     const rec = { pallet_id: id, pallet_date: day, seq: seq, created_at: now, created_by: by, device: clean_(p.device, 60),
                   scrap_type: clean_(p.scrap_type, 60), source: clean_(p.source, 80), weight_kg: weight, note: clean_(p.note, 300),
-                  status: 'open', client_id: clientId };
+                  status: 'open', client_id: clientId, department: dept };
     sh.getRange(sh.getLastRow() + 1, 1, 1, SCRAP_HEADERS.length).setValues([SCRAP_HEADERS.map(function (h) { return rec[h] === undefined ? '' : rec[h]; })]);
     scrapLog_([{ pallet_id: id, event: 'create', by: by, at: now, to: weight === '' ? '' : weight + ' kg',
-                 note: [rec.scrap_type, rec.source, rec.device ? 'เครื่อง ' + rec.device : ''].filter(String).join(' · ') }]);
+                 note: [rec.department, rec.scrap_type, rec.source, rec.device ? 'เครื่อง ' + rec.device : ''].filter(String).join(' · ') }]);
     return scrapToClient_(rec);
   });
 }
@@ -1219,25 +1223,39 @@ function scrapList(filter) {
   let from = clean_(filter.dateFrom, 10), to = clean_(filter.dateTo, 10);
   if (from && to && from > to) { const t = from; from = to; to = t; }
   const status = clean_(filter.status, 20), type = clean_(filter.type, 60), q = clean_(filter.q, 80).toLowerCase();
+  const dept = clean_(filter.department, 80), batch = clean_(filter.ship_batch, 40);
   const sh = book_().getSheetByName(SCRAP_SHEET);
   const rows = sh ? scrapRead_(sh).map(scrapToClient_) : [];
   const photos = photosByScan_();
   const urls = filter.export ? scrapPhotoUrls_() : null;
-  const out = [], byType = {}, byStatus = { open: 0, closed: 0, shipped: 0 }, types = {}, sources = {};
+  const out = [], byType = {}, byStatus = { open: 0, closed: 0, shipped: 0 }, kgByStatus = { open: 0, closed: 0, shipped: 0 }, types = {}, sources = {}, usedDepts = {};
+  // คงเหลือในโรงงาน = ทุกพาเลทที่ยังไม่ขาย (เปิดอยู่ + ปิดแล้ว) ทุกวันที่ ไม่ขึ้นกับตัวกรอง
+  const stock = { n: 0, kg: 0, noWeight: 0, closed: 0, closedKg: 0, byType: {} };
   let total = 0, totalKg = 0, noWeight = 0;
   for (let i = rows.length - 1; i >= 0; i--) {
     const r = rows[i];
     if (r.scrap_type) types[r.scrap_type] = 1;
+    if (r.department) usedDepts[r.department] = 1;
     if (r.source && Object.keys(sources).length < 200) sources[r.source] = 1;
+    if (r.status === 'open' || r.status === 'closed') {
+      stock.n++;
+      const st = stock.byType[r.scrap_type || '-'] || (stock.byType[r.scrap_type || '-'] = { n: 0, kg: 0 });
+      st.n++;
+      if (r.weight_kg === '') stock.noWeight++; else { stock.kg += r.weight_kg; st.kg += r.weight_kg; }
+      if (r.status === 'closed') { stock.closed++; stock.closedKg += r.weight_kg || 0; }
+    }
     if (r.status === 'deleted' && !filter.includeDeleted) continue;
     if (from && r.pallet_date < from) continue;
     if (to && r.pallet_date > to) continue;
     if (status && r.status !== status) continue;
     if (type && r.scrap_type !== type) continue;
-    if (q && [r.pallet_id, r.scrap_type, r.source, r.note, r.created_by, r.ship_ref].join(' ').toLowerCase().indexOf(q) < 0) continue;
+    if (dept && r.department !== dept) continue;
+    if (batch && r.ship_batch !== batch) continue;
+    if (q && [r.pallet_id, r.scrap_type, r.source, r.note, r.created_by, r.ship_ref, r.department].join(' ').toLowerCase().indexOf(q) < 0) continue;
     if (r.status !== 'deleted') {
       total++;
       byStatus[r.status] = (byStatus[r.status] || 0) + 1;
+      kgByStatus[r.status] = (kgByStatus[r.status] || 0) + (r.weight_kg || 0);
       const t = byType[r.scrap_type || '-'] || (byType[r.scrap_type || '-'] = { n: 0, kg: 0 });
       t.n++;
       if (r.weight_kg === '') noWeight++; else { t.kg += r.weight_kg; totalKg += r.weight_kg; }
@@ -1248,9 +1266,15 @@ function scrapList(filter) {
       out.push(r);
     }
   }
-  Object.keys(byType).forEach(function (k) { byType[k].kg = Math.round(byType[k].kg * 1000) / 1000; });
-  return { rows: out, total: total, totalKg: Math.round(totalKg * 1000) / 1000, noWeight: noWeight, byType: byType, byStatus: byStatus,
-           types: Object.keys(types).sort(), sources: Object.keys(sources) };
+  const r3 = function (x) { return Math.round(x * 1000) / 1000; };
+  Object.keys(byType).forEach(function (k) { byType[k].kg = r3(byType[k].kg); });
+  Object.keys(kgByStatus).forEach(function (k) { kgByStatus[k] = r3(kgByStatus[k]); });
+  Object.keys(stock.byType).forEach(function (k) { stock.byType[k].kg = r3(stock.byType[k].kg); });
+  stock.kg = r3(stock.kg); stock.closedKg = r3(stock.closedKg);
+  const depts = scrapDepartments();
+  Object.keys(usedDepts).forEach(function (d) { if (depts.indexOf(d) < 0) depts.push(d); });
+  return { rows: out, total: total, totalKg: r3(totalKg), noWeight: noWeight, byType: byType, byStatus: byStatus, kgByStatus: kgByStatus, stock: stock,
+           types: Object.keys(types).sort(), sources: Object.keys(sources), departments: depts };
 }
 
 function scrapPhotoUrls_() {
@@ -1280,6 +1304,7 @@ function scrapUpdate(id, ch, by, reason) {
   return scrapLocked_(function (sh) {
     const row = scrapRow_(sh, id);
     if (String(row.status) === 'deleted') throw new Error('พาเลทนี้ถูกลบแล้ว');
+    if (String(row.status) === 'shipped') throw new Error('พาเลทนี้ขายแล้ว แก้ไขไม่ได้ (ถ้าจำเป็น ให้กด "เปิดใหม่" ก่อน)');
     const now = new Date(), logs = [];
     const set = function (field, v, label) {
       const old = row[field] === undefined || row[field] === null ? '' : row[field];
@@ -1297,6 +1322,7 @@ function scrapUpdate(id, ch, by, reason) {
       set('weight_kg', w, 'น้ำหนัก');
     }
     if ('scrap_type' in ch) set('scrap_type', clean_(ch.scrap_type, 60), 'ประเภท');
+    if ('department' in ch) { if (!clean_(ch.department, 80)) throw new Error('กรุณาเลือกแผนก'); set('department', clean_(ch.department, 80), 'แผนก'); }
     if ('source' in ch) set('source', clean_(ch.source, 80), 'ที่มา');
     if ('note' in ch) set('note', clean_(ch.note, 300), 'หมายเหตุ');
     if (logs.length) {
@@ -1324,9 +1350,9 @@ function scrapSetStatus(id, status, by, opt) {
     if (status === 'closed' && !row.closed_at) { row.closed_by = by; row.closed_at = now; }
     if (status === 'shipped') {
       if (!row.closed_at) { row.closed_by = by; row.closed_at = now; }
-      row.shipped_by = by; row.shipped_at = now; row.ship_ref = clean_(opt.ship_ref, 120);
-    }
-    if (status === 'open') { row.closed_by = ''; row.closed_at = ''; row.shipped_by = ''; row.shipped_at = ''; row.ship_ref = ''; }
+      row.shipped_by = by; row.shipped_at = now; row.ship_ref = clean_(opt.ship_ref, 120); row.ship_batch = scrapBatchId_(now);
+    } else { row.shipped_by = ''; row.shipped_at = ''; row.ship_ref = ''; row.ship_batch = ''; }
+    if (status === 'open') { row.closed_by = ''; row.closed_at = ''; }
     row.updated_by = by; row.updated_at = now;
     scrapWrite_(sh, row);
     scrapLog_([{ pallet_id: String(row.pallet_id), event: 'status', by: by, at: now, field: 'สถานะ', from: old, to: status,
@@ -1341,6 +1367,7 @@ function scrapDelete(id, by, reason) {
   if (!reason) throw new Error('กรุณาเลือกเหตุผล');
   return scrapLocked_(function (sh) {
     const row = scrapRow_(sh, id);
+    if (String(row.status) === 'shipped') throw new Error('พาเลทนี้ขายแล้ว ลบไม่ได้ (ถ้าจำเป็น ให้กด "เปิดใหม่" ก่อน)');
     if (String(row.status) !== 'deleted') {
       const now = new Date(), old = String(row.status);
       row.status = 'deleted'; row.deleted_by = by; row.deleted_at = now; row.delete_reason = reason;
@@ -1365,4 +1392,86 @@ function scrapTimeline(id) {
   }
   events.sort(function (a, b) { return a.at < b.at ? -1 : a.at > b.at ? 1 : 0; });
   return { record: rec, events: events };
+}
+
+function scrapBatchId_(now) {
+  return 'SHIP-' + Utilities.formatDate(now, TZ, 'yyyyMMdd-HHmmss') + '-' + Utilities.getUuid().slice(0, 4).toUpperCase();
+}
+
+/** ขายหลายพาเลทพร้อมกัน — ทุกพาเลทต้อง "ปิดแล้ว" และมีน้ำหนัก (ไม่ผ่านแม้ 1 พาเลท = ไม่บันทึกเลย) · ได้เลขชุด ship_batch เดียวกัน ใช้พิมพ์ใบส่งของ */
+function scrapShipMany(ids, by, opt) {
+  opt = opt || {};
+  by = clean_(by, 60);
+  const ref = clean_(opt.ship_ref, 120);
+  if (!by) throw new Error('กรุณาระบุชื่อ');
+  if (!ref) throw new Error('กรุณาใส่เลขที่เอกสาร / ผู้รับซื้อ');
+  if (!Array.isArray(ids) || !ids.length) throw new Error('ยังไม่ได้เลือกพาเลท');
+  if (ids.length > 500) throw new Error('เลือกได้ครั้งละไม่เกิน 500 พาเลท');
+  return scrapLocked_(function (sh) {
+    const all = scrapRead_(sh), byId = {};
+    all.forEach(function (r) { byId[String(r.pallet_id)] = r; });
+    const seen = {}, rows = [], bad = [];
+    ids.forEach(function (x) {
+      const id = clean_(x, 40);
+      if (!id || seen[id]) return;
+      seen[id] = 1;
+      const r = byId[id];
+      if (!r) bad.push(id + ' (ไม่พบ)');
+      else if (String(r.status) !== 'closed') bad.push(id + ' (' + ({ open: 'ยังไม่ปิด', shipped: 'ขายแล้ว', deleted: 'ถูกลบ' }[String(r.status)] || r.status) + ')');
+      else if (r.weight_kg === '' || r.weight_kg == null) bad.push(id + ' (ไม่มีน้ำหนัก)');
+      else rows.push(r);
+    });
+    if (bad.length) throw new Error('ขายไม่ได้: ' + bad.join(', ') + ' — กรุณาโหลดรายการใหม่');
+    const now = new Date(), batch = scrapBatchId_(now);
+    rows.forEach(function (r) {
+      r.status = 'shipped'; r.shipped_by = by; r.shipped_at = now; r.ship_ref = ref; r.ship_batch = batch; r.updated_by = by; r.updated_at = now;
+      scrapWrite_(sh, r);
+    });
+    scrapLog_(rows.map(function (r) {
+      return { pallet_id: String(r.pallet_id), event: 'status', by: by, at: now, field: 'สถานะ', from: 'closed', to: 'shipped', note: ref + ' · ชุด ' + batch + ' (' + rows.length + ' พาเลท)' };
+    }));
+    return { ship_batch: batch, ship_ref: ref, shipped_at: fmt_(now), shipped_by: by, rows: rows.map(scrapToClient_) };
+  });
+}
+
+// ---------- แผนก (dropdown หน้า Scrap) ----------
+// รายชื่อแผนกอยู่ในชีต Departments (คอลัมน์ department, active) — ผู้ดูแลวาง/แก้ในชีตได้ (เช่น คัดลอกรายชื่อแผนกจาก Kingdee)
+// ใส่ active = FALSE เพื่อซ่อนแผนกที่เลิกใช้ · เพิ่มจากหน้าเว็บได้ (scrapAddDepartment)
+const DEPT_SHEET = 'Departments';
+const DEPT_HEADERS = ['department', 'active', 'added_by', 'added_at'];
+
+function deptSheet_() { return cntSheet_(DEPT_SHEET, DEPT_HEADERS, ['department', 'added_by']); }
+
+function scrapDepartments() {
+  const sh = book_().getSheetByName(DEPT_SHEET);
+  if (!sh || sh.getLastRow() < 2) return [];
+  const out = [];
+  sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues().forEach(function (r) {
+    const name = clean_(r[0], 80), off = r[1] === false || /^(false|no|0|n|ปิด|ไม่ใช้)$/i.test(String(r[1]).trim());
+    if (name && !off && out.indexOf(name) < 0) out.push(name);
+  });
+  return out;
+}
+
+function scrapAddDepartment(name, by) {
+  name = clean_(name, 80); by = clean_(by, 60);
+  if (!name) throw new Error('กรุณาใส่ชื่อแผนก');
+  if (!by) throw new Error('กรุณาระบุชื่อ');
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const sh = deptSheet_();
+    const n = sh.getLastRow() - 1;
+    const vals = n > 0 ? sh.getRange(2, 1, n, 2).getValues() : [];
+    for (let i = 0; i < vals.length; i++) {
+      if (String(vals[i][0]).trim().toLowerCase() === name.toLowerCase()) {
+        sh.getRange(i + 2, 2).setValue(true); // เคยปิดไว้ → เปิดใช้อีกครั้ง
+        return { department: String(vals[i][0]).trim(), departments: scrapDepartments() };
+      }
+    }
+    sh.getRange(sh.getLastRow() + 1, 1, 1, DEPT_HEADERS.length).setValues([[name, true, by, new Date()]]);
+    return { department: name, departments: scrapDepartments() };
+  } finally {
+    lock.releaseLock();
+  }
 }
