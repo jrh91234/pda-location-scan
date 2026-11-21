@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261121-0724'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261121-0740'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -120,38 +120,60 @@ function beep(ok) {
 function setMsg(type, text, camFor) { S.msg = { type: type, text: text, at: Date.now(), camFor: camFor || '' }; renderMsg(); }
 
 // ======================= Layout =======================
+var VIEWS = [['scan', '📷', 'สแกน'], ['manual', '⌨️', 'กรอกเอง'], ['count', '🔢', 'นับรูป'], ['map', '🗺', 'ผัง'], ['kd', '📊', 'Kingdee'],
+  ['scrap', '♻️', 'Scrap'], ['history', '🕘', 'ประวัติ / ลบ']];
+function viewInfo(v) { return VIEWS.filter(function (x) { return x[0] === v; })[0] || VIEWS[0]; }
+function pendingCount() { return S.recent.filter(function (r) { return r.status === 'pending'; }).length; }
+
 function render() {
   store('pda_view', S.view);
-  var pending = S.recent.filter(function (r) { return r.status === 'pending'; }).length;
+  var pending = pendingCount(), cur = viewInfo(S.view);
   $('app').innerHTML =
     '<header class="top">' +
-      '<div class="brand">PDA Scan <span class="ver">v' + esc(APP_VERSION) + '</span></div>' +
+      '<button class="icon burger" id="btnMenu" aria-label="เมนู" aria-expanded="false">☰' + (pending ? '<b class="badge burger-badge">' + pending + '</b>' : '') + '</button>' +
+      '<div class="brand"><span class="view-title">' + esc(cur[2]) + '</span> <span class="ver">v' + esc(APP_VERSION) + '</span></div>' +
       '<button class="chip" id="btnUser">' + (S.user ? '👤 ' + esc(S.user) : '👤 ใส่ชื่อ') + '</button>' +
       '<span id="net" class="dot ' + (S.online ? 'on' : 'off') + '" title="สถานะเครือข่าย"></span>' +
       '<button class="icon" id="btnSettings" aria-label="ตั้งค่า">⚙</button>' +
     '</header>' +
-    '<nav class="tabs">' +
-      '<button data-view="scan" class="' + (S.view === 'scan' ? 'active' : '') + '">สแกน' + (pending ? ' <b class="badge">' + pending + '</b>' : '') + '</button>' +
-      '<button data-view="manual" class="' + (S.view === 'manual' ? 'active' : '') + '">กรอกเอง</button>' +
-      '<button data-view="count" class="' + (S.view === 'count' ? 'active' : '') + '">นับรูป</button>' +
-      '<button data-view="map" class="' + (S.view === 'map' ? 'active' : '') + '">ผัง</button>' +
-      '<button data-view="kd" class="' + (S.view === 'kd' ? 'active' : '') + '">Kingdee</button>' +
-      '<button data-view="scrap" class="' + (S.view === 'scrap' ? 'active' : '') + '">Scrap</button>' +
-      '<button data-view="history" class="' + (S.view === 'history' ? 'active' : '') + '">ประวัติ / ลบ</button>' +
-    '</nav>' +
+    '<div id="drawer" class="drawer hidden" aria-hidden="true"><nav class="drawer-panel" aria-label="เมนู">' +
+      '<div class="drawer-head">PDA Scan <span class="ver">v' + esc(APP_VERSION) + '</span></div>' +
+      VIEWS.map(function (v) {
+        return '<button data-view="' + v[0] + '" class="' + (S.view === v[0] ? 'active' : '') + '"><span class="dv-ico">' + v[1] + '</span>' + esc(v[2]) +
+          (v[0] === 'scan' && pending ? ' <b class="badge">' + pending + '</b>' : '') + '</button>';
+      }).join('') +
+    '</nav></div>' +
     '<main id="main" class="view-' + (S.view === 'kd' ? 'map view-kd' : S.view) + '"></main>';
   $('btnUser').onclick = openUserModal;
   $('btnSettings').onclick = openSettings;
-  Array.prototype.forEach.call(document.querySelectorAll('.tabs button'), function (b) {
-    b.onclick = function () { S.view = b.getAttribute('data-view'); render(); if (S.view !== 'history' && S.view !== 'count' && S.view !== 'scrap' && !isMapView()) syncRecent(); };
+  $('btnMenu').onclick = function () { toggleDrawer(); };
+  $('drawer').onclick = function (e) { if (e.target === $('drawer')) toggleDrawer(false); };
+  Array.prototype.forEach.call(document.querySelectorAll('#drawer [data-view]'), function (b) {
+    b.onclick = function () {
+      toggleDrawer(false);
+      var v = b.getAttribute('data-view'); if (v === S.view) return;
+      S.view = v; render(); if (S.view !== 'history' && S.view !== 'count' && S.view !== 'scrap' && !isMapView()) syncRecent();
+    };
   });
   if (S.view === 'scan') renderScan(); else if (S.view === 'manual') renderManual(); else if (S.view === 'count') renderCount(); else if (isMapView()) renderMap(); else if (S.view === 'scrap') renderScrap(); else renderHistory();
 }
 
+function toggleDrawer(open) {
+  var d = $('drawer'); if (!d) return;
+  if (open === undefined) open = d.classList.contains('hidden');
+  d.classList.toggle('hidden', !open);
+  d.setAttribute('aria-hidden', open ? 'false' : 'true');
+  $('btnMenu').setAttribute('aria-expanded', open ? 'true' : 'false');
+  if (!open) setTimeout(focusScan, 50);
+}
+document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && $('drawer') && !$('drawer').classList.contains('hidden')) toggleDrawer(false); });
+
 function refreshHeader() {
-  var pending = S.recent.filter(function (r) { return r.status === 'pending'; }).length;
-  var tab = document.querySelector('.tabs button[data-view="scan"]');
-  if (tab) tab.innerHTML = 'สแกน' + (pending ? ' <b class="badge">' + pending + '</b>' : '');
+  var pending = pendingCount();
+  var bm = $('btnMenu');
+  if (bm) bm.innerHTML = '☰' + (pending ? '<b class="badge burger-badge">' + pending + '</b>' : '');
+  var tab = document.querySelector('#drawer [data-view="scan"]');
+  if (tab) tab.innerHTML = '<span class="dv-ico">📷</span>สแกน' + (pending ? ' <b class="badge">' + pending + '</b>' : '');
   var n = $('net'); if (n) n.className = 'dot ' + (S.online ? 'on' : 'off');
 }
 
