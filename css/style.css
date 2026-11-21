@@ -663,3 +663,5 @@ main.view-kd > .map-top, .map-top.tall { position: static; }
 .sm-main { flex: 1; min-width: 0; }
 .sm-kg { font-weight: 700; white-space: nowrap; }
 .sm-sum { margin: 8px 2px; }
+.row.st-shipped { border-left-color: var(--blue); }
+.sm-item.sm-off { opacity: .55; }

@@ -1095,7 +1095,8 @@ function saveCountSample(p) {
 
 // ======================= Scrap (พาเลทเศษวัสดุ) =======================
 // เลขพาเลท = วันที่ (ddMMyyyy เวลาไทย) + "-" + ลำดับของวันนั้น เช่น 11062026-1 — เซิร์ฟเวอร์ออกเลขภายใน lock จึงไม่ซ้ำข้ามเครื่อง
-// สถานะ: open (กำลังใส่ของ) → closed (ปิด/ชั่งแล้ว) → shipped (ส่งขาย/ส่งออกแล้ว) · ลบ = soft delete (status = deleted)
+// สถานะ: stock (อยู่ในโรงงาน) → shipped (ขายแล้ว) · ลบ = soft delete (status = deleted)
+// ข้อมูลเก่าที่เป็น open / closed (เวอร์ชันก่อน) ถือเป็น stock (แปลงตอนอ่าน — ไม่ต้องแก้ชีต)
 // เลขที่ลบแล้วไม่นำกลับมาใช้ใหม่ · ทุกการเปลี่ยนแปลงเพิ่มแถวในชีต ScrapLog · รูปเก็บในชีต Photos (scan_id = เลขพาเลท, location = SCRAP)
 const SCRAP_SHEET = 'Scrap';
 const SCRAP_HEADERS = ['pallet_id', 'pallet_date', 'seq', 'created_at', 'created_by', 'device', 'scrap_type', 'source', 'weight_kg', 'note',
@@ -1104,7 +1105,8 @@ const SCRAP_HEADERS = ['pallet_id', 'pallet_date', 'seq', 'created_at', 'created
 const SCRAP_TEXT_COLS = ['pallet_id', 'pallet_date', 'created_by', 'device', 'scrap_type', 'source', 'note', 'ship_ref', 'client_id', 'department', 'ship_batch'];
 const SCRAP_LOG_SHEET = 'ScrapLog';
 const SCRAP_LOG_HEADERS = ['at', 'pallet_id', 'event', 'by', 'field', 'from', 'to', 'note', 'ref'];
-const SCRAP_STATUS = { open: 1, closed: 1, shipped: 1 };
+const SCRAP_STATUS = { stock: 1, shipped: 1 };
+function scrapSt_(v) { v = String(v || ''); return v === 'shipped' || v === 'deleted' ? v : 'stock'; }
 const MAX_SCRAP_KG = 100000;
 
 function scrapSheet_() {
@@ -1138,7 +1140,7 @@ function scrapToClient_(o) {
     pallet_id: String(o.pallet_id), pallet_date: String(o.pallet_date instanceof Date ? Utilities.formatDate(o.pallet_date, TZ, 'yyyy-MM-dd') : o.pallet_date),
     seq: Number(o.seq) || 0, created_at: fmt_(o.created_at), created_by: String(o.created_by || ''), device: String(o.device || ''),
     scrap_type: String(o.scrap_type || ''), source: String(o.source || ''), weight_kg: scrapNum_(o.weight_kg), note: String(o.note || ''),
-    status: String(o.status || 'open'), updated_by: String(o.updated_by || ''), updated_at: fmt_(o.updated_at),
+    status: scrapSt_(o.status), updated_by: String(o.updated_by || ''), updated_at: fmt_(o.updated_at),
     weight_original: scrapNum_(o.weight_original), closed_by: String(o.closed_by || ''), closed_at: fmt_(o.closed_at),
     shipped_by: String(o.shipped_by || ''), shipped_at: fmt_(o.shipped_at), ship_ref: String(o.ship_ref || ''),
     deleted_by: String(o.deleted_by || ''), deleted_at: fmt_(o.deleted_at), delete_reason: String(o.delete_reason || ''),
@@ -1208,7 +1210,7 @@ function scrapCreate(p) {
     const id = Utilities.formatDate(now, TZ, 'ddMMyyyy') + '-' + seq;
     const rec = { pallet_id: id, pallet_date: day, seq: seq, created_at: now, created_by: by, device: clean_(p.device, 60),
                   scrap_type: clean_(p.scrap_type, 60), source: clean_(p.source, 80), weight_kg: weight, note: clean_(p.note, 300),
-                  status: 'open', client_id: clientId, department: dept };
+                  status: 'stock', client_id: clientId, department: dept };
     sh.getRange(sh.getLastRow() + 1, 1, 1, SCRAP_HEADERS.length).setValues([SCRAP_HEADERS.map(function (h) { return rec[h] === undefined ? '' : rec[h]; })]);
     scrapLog_([{ pallet_id: id, event: 'create', by: by, at: now, to: weight === '' ? '' : weight + ' kg',
                  note: [rec.department, rec.scrap_type, rec.source, rec.device ? 'เครื่อง ' + rec.device : ''].filter(String).join(' · ') }]);
@@ -1228,21 +1230,20 @@ function scrapList(filter) {
   const rows = sh ? scrapRead_(sh).map(scrapToClient_) : [];
   const photos = photosByScan_();
   const urls = filter.export ? scrapPhotoUrls_() : null;
-  const out = [], byType = {}, byStatus = { open: 0, closed: 0, shipped: 0 }, kgByStatus = { open: 0, closed: 0, shipped: 0 }, types = {}, sources = {}, usedDepts = {};
-  // คงเหลือในโรงงาน = ทุกพาเลทที่ยังไม่ขาย (เปิดอยู่ + ปิดแล้ว) ทุกวันที่ ไม่ขึ้นกับตัวกรอง
-  const stock = { n: 0, kg: 0, noWeight: 0, closed: 0, closedKg: 0, byType: {} };
+  const out = [], byType = {}, byStatus = { stock: 0, shipped: 0 }, kgByStatus = { stock: 0, shipped: 0 }, types = {}, sources = {}, usedDepts = {};
+  // Stock ในโรงงาน = ทุกพาเลทที่ยังไม่ขาย ทุกวันที่ ไม่ขึ้นกับตัวกรอง · ready = มีน้ำหนักแล้ว (ขายได้)
+  const stock = { n: 0, kg: 0, noWeight: 0, ready: 0, byType: {} };
   let total = 0, totalKg = 0, noWeight = 0;
   for (let i = rows.length - 1; i >= 0; i--) {
     const r = rows[i];
     if (r.scrap_type) types[r.scrap_type] = 1;
     if (r.department) usedDepts[r.department] = 1;
     if (r.source && Object.keys(sources).length < 200) sources[r.source] = 1;
-    if (r.status === 'open' || r.status === 'closed') {
+    if (r.status === 'stock') {
       stock.n++;
       const st = stock.byType[r.scrap_type || '-'] || (stock.byType[r.scrap_type || '-'] = { n: 0, kg: 0 });
       st.n++;
-      if (r.weight_kg === '') stock.noWeight++; else { stock.kg += r.weight_kg; st.kg += r.weight_kg; }
-      if (r.status === 'closed') { stock.closed++; stock.closedKg += r.weight_kg || 0; }
+      if (r.weight_kg === '') stock.noWeight++; else { stock.kg += r.weight_kg; st.kg += r.weight_kg; stock.ready++; }
     }
     if (r.status === 'deleted' && !filter.includeDeleted) continue;
     if (from && r.pallet_date < from) continue;
@@ -1270,7 +1271,7 @@ function scrapList(filter) {
   Object.keys(byType).forEach(function (k) { byType[k].kg = r3(byType[k].kg); });
   Object.keys(kgByStatus).forEach(function (k) { kgByStatus[k] = r3(kgByStatus[k]); });
   Object.keys(stock.byType).forEach(function (k) { stock.byType[k].kg = r3(stock.byType[k].kg); });
-  stock.kg = r3(stock.kg); stock.closedKg = r3(stock.closedKg);
+  stock.kg = r3(stock.kg);
   const depts = scrapDepartments();
   Object.keys(usedDepts).forEach(function (d) { if (depts.indexOf(d) < 0) depts.push(d); });
   return { rows: out, total: total, totalKg: r3(totalKg), noWeight: noWeight, byType: byType, byStatus: byStatus, kgByStatus: kgByStatus, stock: stock,
@@ -1334,7 +1335,7 @@ function scrapUpdate(id, ch, by, reason) {
   });
 }
 
-/** เปลี่ยนสถานะ: open / closed (ต้องมีน้ำหนัก) / shipped (ใส่เลขที่เอกสารหรือผู้รับซื้อได้) */
+/** เปลี่ยนสถานะ: shipped = ขาย (ต้องมีน้ำหนัก, ใส่เลขที่เอกสาร/ผู้รับซื้อได้) · stock = ยกเลิกการขาย คืนเข้า Stock */
 function scrapSetStatus(id, status, by, opt) {
   opt = opt || {};
   by = clean_(by, 60); status = clean_(status, 20);
@@ -1343,16 +1344,13 @@ function scrapSetStatus(id, status, by, opt) {
   return scrapLocked_(function (sh) {
     const row = scrapRow_(sh, id);
     if (String(row.status) === 'deleted') throw new Error('พาเลทนี้ถูกลบแล้ว');
-    if (status !== 'open' && (row.weight_kg === '' || row.weight_kg == null)) throw new Error('ต้องใส่น้ำหนักก่อนปิดพาเลท');
-    const old = String(row.status || 'open'), now = new Date();
+    if (status === 'shipped' && (row.weight_kg === '' || row.weight_kg == null)) throw new Error('ต้องใส่น้ำหนักก่อนขาย');
+    const old = scrapSt_(row.status), now = new Date();
     if (old === status) return scrapToClient_(row);
     row.status = status;
-    if (status === 'closed' && !row.closed_at) { row.closed_by = by; row.closed_at = now; }
     if (status === 'shipped') {
-      if (!row.closed_at) { row.closed_by = by; row.closed_at = now; }
       row.shipped_by = by; row.shipped_at = now; row.ship_ref = clean_(opt.ship_ref, 120); row.ship_batch = scrapBatchId_(now);
     } else { row.shipped_by = ''; row.shipped_at = ''; row.ship_ref = ''; row.ship_batch = ''; }
-    if (status === 'open') { row.closed_by = ''; row.closed_at = ''; }
     row.updated_by = by; row.updated_at = now;
     scrapWrite_(sh, row);
     scrapLog_([{ pallet_id: String(row.pallet_id), event: 'status', by: by, at: now, field: 'สถานะ', from: old, to: status,
@@ -1398,7 +1396,7 @@ function scrapBatchId_(now) {
   return 'SHIP-' + Utilities.formatDate(now, TZ, 'yyyyMMdd-HHmmss') + '-' + Utilities.getUuid().slice(0, 4).toUpperCase();
 }
 
-/** ขายหลายพาเลทพร้อมกัน — ทุกพาเลทต้อง "ปิดแล้ว" และมีน้ำหนัก (ไม่ผ่านแม้ 1 พาเลท = ไม่บันทึกเลย) · ได้เลขชุด ship_batch เดียวกัน ใช้พิมพ์ใบส่งของ */
+/** ขายหลายพาเลทพร้อมกัน — ทุกพาเลทต้องอยู่ใน Stock และมีน้ำหนัก (ไม่ผ่านแม้ 1 พาเลท = ไม่บันทึกเลย) · ได้เลขชุด ship_batch เดียวกัน ใช้พิมพ์ใบส่งของ */
 function scrapShipMany(ids, by, opt) {
   opt = opt || {};
   by = clean_(by, 60);
@@ -1417,7 +1415,7 @@ function scrapShipMany(ids, by, opt) {
       seen[id] = 1;
       const r = byId[id];
       if (!r) bad.push(id + ' (ไม่พบ)');
-      else if (String(r.status) !== 'closed') bad.push(id + ' (' + ({ open: 'ยังไม่ปิด', shipped: 'ขายแล้ว', deleted: 'ถูกลบ' }[String(r.status)] || r.status) + ')');
+      else if (scrapSt_(r.status) !== 'stock') bad.push(id + ' (' + ({ shipped: 'ขายแล้ว', deleted: 'ถูกลบ' }[scrapSt_(r.status)]) + ')');
       else if (r.weight_kg === '' || r.weight_kg == null) bad.push(id + ' (ไม่มีน้ำหนัก)');
       else rows.push(r);
     });
@@ -1428,7 +1426,7 @@ function scrapShipMany(ids, by, opt) {
       scrapWrite_(sh, r);
     });
     scrapLog_(rows.map(function (r) {
-      return { pallet_id: String(r.pallet_id), event: 'status', by: by, at: now, field: 'สถานะ', from: 'closed', to: 'shipped', note: ref + ' · ชุด ' + batch + ' (' + rows.length + ' พาเลท)' };
+      return { pallet_id: String(r.pallet_id), event: 'status', by: by, at: now, field: 'สถานะ', from: 'stock', to: 'shipped', note: ref + ' · ชุด ' + batch + ' (' + rows.length + ' พาเลท)' };
     }));
     return { ship_batch: batch, ship_ref: ref, shipped_at: fmt_(now), shipped_by: by, rows: rows.map(scrapToClient_) };
   });
