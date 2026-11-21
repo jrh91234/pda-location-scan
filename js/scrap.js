@@ -1,9 +1,10 @@
 // ======================= Scrap — พาเลทเศษวัสดุ =======================
 // สร้างพาเลท (เลขพาเลท = วันที่-ลำดับ เช่น 11062026-1 ออกโดยเซิร์ฟเวอร์) · น้ำหนัก kg · รูปหลายรูป (ใช้ระบบรูปเดียวกับหน้าสแกน)
-// สถานะ: เปิดอยู่ → ปิดพาเลท (ชั่งแล้ว) → ส่งขาย/ส่งออกแล้ว · Export Excel / PDF (รายงาน, ใบพาเลท, ป้ายพาเลทพร้อม QR)
+// สถานะ: เปิดอยู่ → ปิดพาเลท (ชั่งแล้ว) → ขายแล้ว (ขายทีละพาเลท หรือหลายพาเลทพร้อมกัน + ใบส่งของ) · พาเลทที่ขายแล้วถูกล็อก
+// แผนก: dropdown จากชีต Departments · Export Excel / PDF (รายงาน, ใบพาเลท, ป้ายพาเลทพร้อม QR, ใบส่งของ)
 
 var SCRAP_TYPES = ['เหล็ก', 'สแตนเลส', 'ทองแดง', 'อลูมิเนียม', 'พลาสติก', 'กระดาษ/ลัง', 'ไม้/พาเลท', 'ชิ้นงานเสีย (NG)', 'อื่นๆ'];
-var SCRAP_ST = { open: ['เปิดอยู่', 'pending'], closed: ['ปิดแล้ว', 'saved'], shipped: ['ส่งออกแล้ว', 'shipped'], deleted: ['ลบแล้ว', 'deleted'] };
+var SCRAP_ST = { open: ['เปิดอยู่', 'pending'], closed: ['ปิดแล้ว', 'saved'], shipped: ['ขายแล้ว', 'shipped'], deleted: ['ลบแล้ว', 'deleted'] };
 var SCRAP_WEIGHT_REASONS = ['ชั่งใหม่', 'กรอกผิด', 'เพิ่ม/เอาของออกจากพาเลท', 'อื่นๆ'];
 var SCRAP_DELETE_REASONS = ['สร้างซ้ำ', 'สร้างผิด', 'รวมกับพาเลทอื่น', 'อื่นๆ'];
 var SCRAP_ID_RE = /^\d{8}-\d+$/;
@@ -11,8 +12,8 @@ var H2P_URL = 'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pd
 var QRGEN_URL = 'https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js';
 
 // โหลดก่อน app.js (app.js render ทันทีตอนโหลด) → ห้ามเรียกฟังก์ชันของ app.js ที่ระดับบนสุดของไฟล์นี้
-var SC = { filter: null, filterInit: { dateFrom: '', dateTo: '', status: '', type: '', q: '', includeDeleted: false }, data: null, loading: false, error: '',
-  types: storeJson('pda_scrap_types') || [], sources: storeJson('pda_scrap_sources') || [] };
+var SC = { filter: null, filterInit: { dateFrom: '', dateTo: '', status: '', type: '', department: '', q: '', includeDeleted: false }, data: null, loading: false, error: '',
+  types: storeJson('pda_scrap_types') || [], sources: storeJson('pda_scrap_sources') || [], depts: storeJson('pda_scrap_depts') || [] };
 
 function scrapFmtKg(v) { return v === '' || v == null ? '' : Number(v).toLocaleString('en-US', { maximumFractionDigits: 3 }) + ' kg'; }
 function scrapDay(d) { var m = /^(\d{4})-(\d\d)-(\d\d)/.exec(d || ''); return m ? m[3] + '/' + m[2] + '/' + m[1] : (d || ''); }
@@ -42,13 +43,16 @@ function renderScrap() {
       '<div class="seg quick-seg">' + [['today', 'วันนี้'], ['yesterday', 'เมื่อวาน'], ['7', '7 วัน'], ['month', 'เดือนนี้'], ['all', 'ทั้งหมด']].map(function (o) {
         return '<button type="button" data-scq="' + o[0] + '" class="' + (scrapQuickOf(f) === o[0] ? 'active' : '') + '">' + o[1] + '</button>';
       }).join('') + '</div>' +
-      '<div class="seg span2">' + [['', 'ทุกสถานะ'], ['open', 'เปิดอยู่'], ['closed', 'ปิดแล้ว'], ['shipped', 'ส่งออกแล้ว']].map(function (o) {
+      '<div class="seg span2">' + [['', 'ทุกสถานะ'], ['open', 'เปิดอยู่'], ['closed', 'ปิดแล้ว'], ['shipped', 'ขายแล้ว']].map(function (o) {
         return '<button type="button" data-scst="' + o[0] + '" class="' + (f.status === o[0] ? 'active' : '') + '">' + o[1] + '</button>';
       }).join('') + '</div>' +
       '<select id="scType" class="field"><option value="">ทุกประเภท</option>' + scrapTypes().map(function (t) {
         return '<option' + (t === f.type ? ' selected' : '') + '>' + esc(t) + '</option>';
       }).join('') + '</select>' +
-      '<input id="scQ" class="field" placeholder="ค้นหา ที่มา / หมายเหตุ / ผู้สร้าง" value="' + esc(f.q) + '">' +
+      '<select id="scDeptF" class="field"><option value="">ทุกแผนก</option>' + scrapDeptList(f.department).map(function (t) {
+        return '<option' + (t === f.department ? ' selected' : '') + '>' + esc(t) + '</option>';
+      }).join('') + '</select>' +
+      '<input id="scQ" class="field span2" placeholder="ค้นหา ที่มา / หมายเหตุ / ผู้สร้าง / เลขเอกสาร" value="' + esc(f.q) + '">' +
       '<label class="radio"><input type="checkbox" id="scDel"' + (f.includeDeleted ? ' checked' : '') + '> แสดงที่ลบแล้ว</label>' +
       '<button class="btn primary" id="scGo">ค้นหา</button>' +
       '<button class="btn" id="scXlsx">⬇️ Excel</button>' +
@@ -59,7 +63,7 @@ function renderScrap() {
   $('scFindGo').onclick = scrapFindSubmit;
   $('scFind').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); scrapFindSubmit(); } });
   $('scGo').onclick = function () { SC.filter = readScrapFilter(); scrapMarkQuick(); loadScrap(); };
-  $('scType').onchange = $('scDel').onchange = function () { $('scGo').click(); };
+  $('scType').onchange = $('scDel').onchange = $('scDeptF').onchange = function () { $('scGo').click(); };
   $('scQ').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); $('scGo').click(); } });
   $('scXlsx').onclick = exportScrapExcel;
   $('scPdf').onclick = openScrapPdfMenu;
@@ -101,7 +105,7 @@ function scrapMarkQuick() {
 function readScrapFilter() {
   var st = document.querySelector('[data-scst].active');
   return { dateFrom: $('scFrom').value, dateTo: $('scTo').value, status: st ? st.getAttribute('data-scst') : '', type: $('scType').value,
-           q: $('scQ').value.trim(), includeDeleted: $('scDel').checked };
+           department: $('scDeptF').value, q: $('scQ').value.trim(), includeDeleted: $('scDel').checked };
 }
 
 function scrapFindSubmit() {
@@ -120,6 +124,7 @@ function loadScrap() {
     SC.data = d;
     if (d.types) { SC.types = d.types; storeJson('pda_scrap_types', d.types); }
     if (d.sources) { SC.sources = d.sources; storeJson('pda_scrap_sources', d.sources.slice(0, 100)); }
+    if (d.departments) { scrapSetDepts(d.departments); scrapRefillDeptFilter(); }
     renderScrapList();
   }, function (err) { SC.loading = false; SC.error = err.message; renderScrapList(); });
 }
@@ -131,9 +136,19 @@ function renderScrapList() {
   var d = SC.data; if (!d) { el.innerHTML = ''; return; }
   var types = Object.keys(d.byType).sort(function (a, b) { return d.byType[b].kg - d.byType[a].kg; });
   var maxKg = types.reduce(function (m, k) { return Math.max(m, d.byType[k].kg); }, 0) || 1;
+  var kg1 = function (v) { return esc(Number(v || 0).toLocaleString('en-US', { maximumFractionDigits: 1 })); };
+  var st = d.stock || { n: 0, kg: 0, noWeight: 0, closed: 0, closedKg: 0, byType: {} };
+  var stTypes = Object.keys(st.byType || {}).sort(function (a, b) { return st.byType[b].kg - st.byType[a].kg; });
   el.innerHTML =
-    '<div class="stats"><div><b>' + d.total + '</b><span>พาเลท</span></div><div><b>' + esc(Number(d.totalKg).toLocaleString('en-US', { maximumFractionDigits: 1 })) + '</b><span>kg รวม</span></div>' +
-      '<div><b class="' + (d.noWeight ? 'warn-num' : '') + '">' + d.noWeight + '</b><span>ยังไม่ชั่ง</span></div></div>' +
+    '<div class="stock-card"><div class="stock-h">🏭 คงเหลือในโรงงาน <span class="muted small">ยังไม่ขาย · ทุกวันที่</span></div>' +
+      '<div class="stock-n"><b>' + kg1(st.kg) + '</b> kg · <b>' + st.n + '</b> พาเลท</div>' +
+      '<div class="small">พร้อมขาย (ปิดแล้ว) <b>' + st.closed + '</b> พาเลท · ' + kg1(st.closedKg) + ' kg' +
+        (st.noWeight ? ' · <span class="warn-text small">ยังไม่ชั่ง ' + st.noWeight + '</span>' : '') + '</div>' +
+      (stTypes.length ? '<div class="stock-types">' + stTypes.map(function (k) { return '<span>' + esc(k) + ' <b>' + kg1(st.byType[k].kg) + '</b> kg</span>'; }).join('') + '</div>' : '') +
+      '<button class="btn warn" id="scShipMany"' + (st.closed ? '' : ' disabled') + '>🚚 ขายหลายพาเลท' + (st.closed ? ' (' + st.closed + ' พร้อมขาย)' : '') + '</button>' +
+    '</div>' +
+    '<div class="stats"><div><b>' + d.total + '</b><span>พาเลท (ตามตัวกรอง)</span></div><div><b>' + kg1(d.totalKg) + '</b><span>kg รวม</span></div>' +
+      '<div><b>' + kg1((d.kgByStatus || {}).shipped) + '</b><span>kg ขายแล้ว</span></div></div>' +
     (types.length ? '<div class="scrap-types">' + types.map(function (k) {
       var t = d.byType[k];
       return '<div class="st-row"><span class="st-name">' + esc(k) + '</span><span class="st-bar"><i style="width:' + Math.max(2, Math.round(t.kg / maxKg * 100)) + '%"></i></span>' +
@@ -146,7 +161,7 @@ function renderScrapList() {
         return '<div class="row scrap-row st-' + (del ? 'deleted' : r.status === 'open' ? 'pending' : 'saved') + '">' +
           '<div class="row-main" data-scopen="' + esc(r.pallet_id) + '">' +
             '<div class="row-top"><b class="pallet-id">' + esc(r.pallet_id) + '</b>' + scrapStTag(r.status) + '</div>' +
-            '<div class="row-sub"><span class="loc-pill">' + esc(r.scrap_type || '-') + '</span>' +
+            '<div class="row-sub"><span class="loc-pill">' + esc(r.scrap_type || '-') + '</span>' + (r.department ? '<span class="dept-pill">' + esc(r.department) + '</span>' : '') +
               (r.weight_kg === '' ? '<span class="warn-text small">⚖ ยังไม่ชั่ง</span>' : '<b>' + esc(scrapFmtKg(r.weight_kg)) + '</b>') +
               (r.weight_original !== '' && r.weight_original !== r.weight_kg ? '<span class="muted small">(เดิม ' + esc(scrapFmtKg(r.weight_original)) + ')</span>' : '') +
               (r.source ? '<span class="muted">จาก ' + esc(r.source) + '</span>' : '') + '</div>' +
@@ -156,11 +171,13 @@ function renderScrapList() {
             (del ? '<div class="row-sub muted small">ลบโดย ' + esc(r.deleted_by) + ' · ' + esc(r.deleted_at) + ' · ' + esc(r.delete_reason) + '</div>' : '') +
           '</div>' +
           (del ? '' : '<div class="row-actions"><button class="btn small" data-cam="' + esc(r.pallet_id) + '" aria-label="ถ่ายรูป">📷</button>' +
-            '<button class="btn small" data-scw="' + esc(r.pallet_id) + '" aria-label="น้ำหนัก">kg</button>' +
-            '<button class="btn small danger" data-scdel="' + esc(r.pallet_id) + '" aria-label="ลบ">ลบ</button></div>') +
+            (r.status === 'shipped' ? '<span class="lock-note" title="ขายแล้ว แก้ไข/ลบไม่ได้">🔒</span>' :
+              '<button class="btn small" data-scw="' + esc(r.pallet_id) + '" aria-label="น้ำหนัก">kg</button>' +
+              '<button class="btn small danger" data-scdel="' + esc(r.pallet_id) + '" aria-label="ลบ">ลบ</button>') + '</div>') +
         '</div>';
       }).join(''));
   bindPhotoButtons(el, scrapRowOf);
+  $('scShipMany').onclick = openScrapShipMany;
   Array.prototype.forEach.call(el.querySelectorAll('[data-scopen]'), function (b) {
     b.onclick = function (e) { if (e.target.closest('button')) return; openScrapDetail(b.getAttribute('data-scopen')); };
   });
@@ -194,28 +211,67 @@ function bindTypeSeg() {
 function readTypeSeg() { var b = document.querySelector('[data-sctype].active'); return b ? b.getAttribute('data-sctype') : ''; }
 function sourceList() { return '<datalist id="scSrcList">' + SC.sources.map(function (s) { return '<option value="' + esc(s) + '">'; }).join('') + '</datalist>'; }
 
+// ---------- แผนก (dropdown) — รายชื่อจากชีต Departments ----------
+function scrapSetDepts(list) { SC.depts = (list || []).slice(); storeJson('pda_scrap_depts', SC.depts); }
+function scrapRefillDeptFilter() {
+  var sel = $('scDeptF'); if (!sel) return;
+  var v = sel.value;
+  sel.innerHTML = '<option value="">ทุกแผนก</option>' + scrapDeptList(v).map(function (t) { return '<option>' + esc(t) + '</option>'; }).join('');
+  sel.value = v;
+}
+function scrapDeptList(cur) { var l = SC.depts.slice(); if (cur && l.indexOf(cur) < 0) l.push(cur); return l; }
+function scrapDeptOptions(cur) {
+  return '<option value="">— เลือกแผนก —</option>' + scrapDeptList(cur).map(function (t) {
+    return '<option' + (t === cur ? ' selected' : '') + '>' + esc(t) + '</option>';
+  }).join('') + '<option value="__add">＋ เพิ่มแผนกใหม่…</option>';
+}
+function scrapDeptSelect(cur) {
+  return '<select id="scDept" class="field big-select">' + scrapDeptOptions(cur) + '</select>' +
+    (SC.depts.length ? '' : '<p class="muted small" id="scDeptHint">ยังไม่มีรายชื่อแผนก — เลือก "＋ เพิ่มแผนกใหม่" หรือให้ผู้ดูแลวางรายชื่อในชีต Departments</p>');
+}
+function bindDeptSelect() {
+  var sel = $('scDept'), prev = sel.value;
+  function refill(v) { sel.innerHTML = scrapDeptOptions(v); sel.value = v; prev = v; if ($('scDeptHint') && SC.depts.length) $('scDeptHint').remove(); }
+  sel.onchange = function () {
+    if (sel.value !== '__add') { prev = sel.value; return; }
+    var name = (window.prompt('ชื่อแผนกใหม่') || '').trim();
+    if (!name) { sel.value = prev; return; }
+    sel.disabled = true;
+    api('scrapAddDepartment', name, S.user).then(function (d) { scrapSetDepts(d.departments); sel.disabled = false; refill(d.department); toast('เพิ่มแผนก ' + d.department); },
+      function (err) { sel.disabled = false; sel.value = prev; toast(err.message, 3500); });
+  };
+  // ดึงรายชื่อล่าสุดเบื้องหลัง (ผู้ดูแลอาจเพิ่มในชีต)
+  api('scrapDepartments').then(function (list) {
+    if (JSON.stringify(list) === JSON.stringify(SC.depts) || !$('scDept') || sel.value === '__add') return;
+    scrapSetDepts(list); refill(sel.value);
+  }, function () {});
+}
+
 function openScrapCreate() {
   if (!S.user) { openUserModal(); return; }
   var last = storeJson('pda_scrap_last') || {};
   openModal('<h3>＋ สร้างพาเลท Scrap</h3>' +
     '<p class="muted small">เลขพาเลทออกให้อัตโนมัติ (วันที่-ลำดับ เช่น ' + esc(scrapIdOf(new Date(), 1)) + ') · ต้องต่ออินเทอร์เน็ต</p>' +
+    '<label>แผนก</label>' + scrapDeptSelect(last.dept || '') +
     '<label>ประเภท Scrap</label>' + scrapTypeSeg(last.type || '') +
-    '<label>ที่มา (แผนก / ไลน์ผลิต)</label><input id="scSrc" class="field" list="scSrcList" autocomplete="off" value="' + esc(last.source || '') + '">' + sourceList() +
+    '<label>ที่มา / ไลน์ผลิต <span class="muted small">(ถ้ามี)</span></label><input id="scSrc" class="field" list="scSrcList" autocomplete="off" value="' + esc(last.source || '') + '">' + sourceList() +
     '<label>น้ำหนัก (kg) <span class="muted small">— ยังไม่ชั่ง เว้นว่างไว้ก่อนได้</span></label>' +
     '<input id="scKg" class="field big" type="number" inputmode="decimal" step="0.01" min="0" placeholder="0.00">' +
     '<label>หมายเหตุ</label><input id="scNote" class="field" autocomplete="off">' +
     '<div class="actions"><button class="btn" id="mCancel">ยกเลิก</button><button class="btn primary" id="mOk">สร้างพาเลท</button></div>');
-  bindTypeSeg();
+  bindTypeSeg(); bindDeptSelect();
   $('mCancel').onclick = closeModal;
   var clientId = uid(); // กดซ้ำ / เน็ตกระตุก → เซิร์ฟเวอร์ไม่สร้างพาเลทซ้ำ
   $('mOk').onclick = function () {
     var kg = $('scKg').value.trim();
     if (kg !== '' && !(Number(kg) >= 0)) { toast('น้ำหนักไม่ถูกต้อง'); $('scKg').focus(); return; }
-    var p = { by: S.user, device: S.device, scrap_type: readTypeSeg(), source: $('scSrc').value.trim(), weight_kg: kg, note: $('scNote').value.trim(), client_id: clientId };
+    var dept = $('scDept').value === '__add' ? '' : $('scDept').value;
+    var p = { by: S.user, device: S.device, department: dept, scrap_type: readTypeSeg(), source: $('scSrc').value.trim(), weight_kg: kg, note: $('scNote').value.trim(), client_id: clientId };
+    if (!p.department) { toast('กรุณาเลือกแผนก'); $('scDept').focus(); return; }
     if (!p.scrap_type) { toast('กรุณาเลือกประเภท Scrap'); return; }
     var btn = $('mOk'); btn.disabled = true; btn.textContent = 'กำลังสร้าง…';
     api('scrapCreate', p).then(function (rec) {
-      storeJson('pda_scrap_last', { type: p.scrap_type, source: p.source });
+      storeJson('pda_scrap_last', { type: p.scrap_type, source: p.source, dept: p.department });
       beep(true);
       scrapDecorate(rec);
       if (S.view === 'scrap') loadScrap(); else SC.data = null;
@@ -233,38 +289,40 @@ function openScrapDetail(idOrRow, isNew) {
     api('scrapGet', idOrRow).then(function (r) { openScrapDetail(scrapDecorate(r), isNew); }, function (err) { beep(false); toast(err.message, 3000); });
     return;
   }
-  var r = idOrRow, del = r.status === 'deleted', ids = photosFor(r.pallet_id, r);
+  var r = idOrRow, del = r.status === 'deleted', sold = r.status === 'shipped', ids = photosFor(r.pallet_id, r);
   function line(k, v) { return '<div class="il"><span class="il-k">' + k + '</span><span class="il-v">' + (v || '<span class="muted">-</span>') + '</span></div>'; }
   openModal((isNew ? '<div class="msg ok">✅ สร้างพาเลทแล้ว — ถ่ายรูปแนบ / พิมพ์ป้ายติดพาเลทได้เลย</div>' : '') +
     '<div class="pallet-head"><div><div class="muted small">เลขพาเลท Scrap</div><div class="pallet-big">' + esc(r.pallet_id) + '</div>' + scrapStTag(r.status) + '</div>' +
       '<div id="scQr" class="pallet-qr"></div></div>' +
     '<div class="card-lite">' +
-      line('ประเภท', esc(r.scrap_type)) + line('ที่มา', esc(r.source)) +
+      line('แผนก', esc(r.department)) + line('ประเภท', esc(r.scrap_type)) + line('ที่มา', esc(r.source)) +
       line('น้ำหนัก', r.weight_kg === '' ? '<span class="warn-text">ยังไม่ชั่ง</span>' : '<b>' + esc(scrapFmtKg(r.weight_kg)) + '</b>' +
         (r.weight_original !== '' && r.weight_original !== r.weight_kg ? ' <span class="muted small">(เดิม ' + esc(scrapFmtKg(r.weight_original)) + ')</span>' : '')) +
       line('หมายเหตุ', esc(r.note)) +
       line('สร้าง', esc(r.created_by) + ' · ' + esc(r.created_at) + (r.device ? ' · ' + esc(r.device) : '')) +
       (r.closed_at ? line('ปิดพาเลท', esc(r.closed_by) + ' · ' + esc(r.closed_at)) : '') +
-      (r.shipped_at ? line('ส่งออก', esc(r.shipped_by) + ' · ' + esc(r.shipped_at) + (r.ship_ref ? ' · 📄 ' + esc(r.ship_ref) : '')) : '') +
+      (r.shipped_at ? line('ขาย', esc(r.shipped_by) + ' · ' + esc(r.shipped_at) + (r.ship_ref ? ' · 📄 ' + esc(r.ship_ref) : '')) : '') +
       (del ? line('ลบ', esc(r.deleted_by) + ' · ' + esc(r.deleted_at) + ' · ' + esc(r.delete_reason)) : '') +
     '</div>' +
+    (sold ? '<div class="msg warn small">🔒 ขายแล้ว — แก้น้ำหนัก / ข้อมูล / ลบไม่ได้ (ถ้าจำเป็นให้กด "เปิดใหม่")</div>' : '') +
     (del ? '' :
       '<div class="actions wrap">' +
         '<button class="btn primary" id="sdCam">📷 ถ่ายรูป</button>' +
         '<button class="btn" id="sdPhotos">🖼 รูป (' + ids.length + ')</button>' +
-        '<button class="btn" id="sdWeight">' + (r.weight_kg === '' ? 'ใส่น้ำหนัก' : 'แก้น้ำหนัก') + '</button>' +
-        '<button class="btn" id="sdEdit">✏️ แก้ข้อมูล</button>' +
+        (sold ? '' : '<button class="btn" id="sdWeight">' + (r.weight_kg === '' ? 'ใส่น้ำหนัก' : 'แก้น้ำหนัก') + '</button>' +
+          '<button class="btn" id="sdEdit">✏️ แก้ข้อมูล</button>') +
       '</div>' +
       '<div class="actions wrap">' +
         (r.status === 'open' ? '<button class="btn warn" id="sdClose">🔒 ปิดพาเลท</button>' : '') +
-        (r.status === 'closed' ? '<button class="btn warn" id="sdShip">🚚 ส่งขาย / ส่งออก</button>' : '') +
+        (r.status === 'closed' ? '<button class="btn warn" id="sdShip">🚚 ขาย / ส่งออก</button>' : '') +
         (r.status !== 'open' ? '<button class="btn" id="sdReopen">🔓 เปิดใหม่</button>' : '') +
       '</div>') +
     '<div class="actions wrap">' +
       '<button class="btn" id="sdLabel">🏷 ป้ายพาเลท (PDF)</button>' +
       '<button class="btn" id="sdPdf">📄 ใบพาเลท (PDF)</button>' +
+      (sold && r.ship_batch ? '<button class="btn" id="sdDn">🧾 ใบส่งของ (PDF)</button>' : '') +
       '<button class="btn" id="sdTl">🕘 ประวัติ</button>' +
-      (del ? '' : '<button class="btn danger" id="sdDel">ลบ</button>') +
+      (del || sold ? '' : '<button class="btn danger" id="sdDel">ลบ</button>') +
     '</div>' +
     '<div class="actions"><button class="btn" id="mCancel">ปิด</button></div>');
   $('mCancel').onclick = closeModal;
@@ -272,19 +330,20 @@ function openScrapDetail(idOrRow, isNew) {
   $('sdLabel').onclick = function () { scrapLabelPdf(r, this); };
   $('sdPdf').onclick = function () { scrapPalletPdf(r, this); };
   $('sdTl').onclick = function () { openScrapTimeline(r); };
+  if ($('sdDn')) $('sdDn').onclick = function () { scrapBatchPdf(r.ship_batch, this); };
   if (del) return;
   $('sdCam').onclick = function () { closeModal(); pickPhoto(r.pallet_id, true, r); };
   $('sdPhotos').onclick = function () { openPhotos(r.pallet_id, r); };
-  $('sdWeight').onclick = function () { editScrapWeight(r); };
-  $('sdEdit').onclick = function () { editScrapInfo(r); };
-  $('sdDel').onclick = function () { deleteScrapUi(r); };
+  if ($('sdWeight')) $('sdWeight').onclick = function () { editScrapWeight(r); };
+  if ($('sdEdit')) $('sdEdit').onclick = function () { editScrapInfo(r); };
+  if ($('sdDel')) $('sdDel').onclick = function () { deleteScrapUi(r); };
   if ($('sdClose')) $('sdClose').onclick = function () {
     if (r.weight_kg === '') { toast('ต้องใส่น้ำหนักก่อนปิดพาเลท'); editScrapWeight(r, 'closed'); return; }
     scrapSetStatusUi(r, 'closed');
   };
   if ($('sdShip')) $('sdShip').onclick = function () { openScrapShip(r); };
   if ($('sdReopen')) $('sdReopen').onclick = function () {
-    confirmModal('เปิดพาเลท ' + esc(r.pallet_id) + ' ใหม่?', 'สถานะจะกลับเป็น "เปิดอยู่" (ข้อมูลการปิด/ส่งออกจะถูกล้าง แต่ยังอยู่ในประวัติ)', 'เปิดใหม่', function () { scrapSetStatusUi(r, 'open'); });
+    confirmModal('เปิดพาเลท ' + esc(r.pallet_id) + ' ใหม่?', 'สถานะจะกลับเป็น "เปิดอยู่" (ข้อมูลการปิด/ขายจะถูกล้าง' + (sold ? ' และพาเลทนี้จะหลุดออกจากใบส่งของเดิม' : '') + ' แต่ยังอยู่ในประวัติ)', 'เปิดใหม่', function () { scrapSetStatusUi(r, 'open'); });
   };
 }
 
@@ -337,17 +396,19 @@ function editScrapWeight(r, thenStatus) {
 function editScrapInfo(r) {
   if (!S.user) { openUserModal(); return; }
   openModal('<h3>✏️ แก้ข้อมูลพาเลท ' + esc(r.pallet_id) + '</h3>' +
+    '<label>แผนก</label>' + scrapDeptSelect(r.department) +
     '<label>ประเภท Scrap</label>' + scrapTypeSeg(r.scrap_type) +
     '<label>ที่มา</label><input id="scSrc" class="field" list="scSrcList" autocomplete="off" value="' + esc(r.source) + '">' + sourceList() +
     '<label>หมายเหตุ</label><input id="scNote" class="field" autocomplete="off" value="' + esc(r.note) + '">' +
     '<div class="actions"><button class="btn" id="mCancel">ยกเลิก</button><button class="btn primary" id="mOk">บันทึก</button></div>');
-  bindTypeSeg();
+  bindTypeSeg(); bindDeptSelect();
   $('mCancel').onclick = function () { openScrapDetail(r); };
   $('mOk').onclick = function () {
-    var t = readTypeSeg();
+    var t = readTypeSeg(), dept = $('scDept').value === '__add' ? '' : $('scDept').value;
+    if (!dept) { toast('กรุณาเลือกแผนก'); return; }
     if (!t) { toast('กรุณาเลือกประเภท Scrap'); return; }
     var btn = $('mOk'); btn.disabled = true;
-    api('scrapUpdate', r.pallet_id, { scrap_type: t, source: $('scSrc').value.trim(), note: $('scNote').value.trim() }, S.user, '').then(function (rec) {
+    api('scrapUpdate', r.pallet_id, { department: dept, scrap_type: t, source: $('scSrc').value.trim(), note: $('scNote').value.trim() }, S.user, '').then(function (rec) {
       rec = scrapApply(rec); rec.photos = r.photos;
       toast('บันทึกแล้ว'); renderScrapList(); openScrapDetail(rec);
     }, function (err) { btn.disabled = false; toast(err.message, 3500); });
@@ -359,16 +420,17 @@ function scrapSetStatusUi(r, status, opt) {
   api('scrapSetStatus', r.pallet_id, status, S.user, opt || {}).then(function (rec) {
     rec = scrapApply(rec); rec.photos = r.photos;
     beep(true);
-    toast(status === 'closed' ? '🔒 ปิดพาเลท ' + rec.pallet_id + ' แล้ว' : status === 'shipped' ? '🚚 บันทึกส่งออกแล้ว' : 'เปิดพาเลทใหม่แล้ว', 2500);
+    toast(status === 'closed' ? '🔒 ปิดพาเลท ' + rec.pallet_id + ' แล้ว' : status === 'shipped' ? '🚚 บันทึกขายแล้ว' : 'เปิดพาเลทใหม่แล้ว', 2500);
     renderScrapList(); openScrapDetail(rec);
   }, function (err) { beep(false); toast(err.message, 3500); });
 }
 
 function openScrapShip(r) {
-  openModal('<h3>🚚 ส่งขาย / ส่งออก ' + esc(r.pallet_id) + '</h3>' +
+  openModal('<h3>🚚 ขาย / ส่งออก ' + esc(r.pallet_id) + '</h3>' +
     '<p class="muted small">' + esc(r.scrap_type) + ' · ' + esc(scrapFmtKg(r.weight_kg)) + '</p>' +
     '<label>เลขที่เอกสาร / ผู้รับซื้อ (ถ้ามี)</label><input id="shRef" class="field" autocomplete="off" placeholder="เช่น INV-0001 / ร้าน ก.">' +
-    '<div class="actions"><button class="btn" id="mCancel">ยกเลิก</button><button class="btn primary" id="mOk">ยืนยันส่งออก</button></div>');
+    '<p class="muted small">ขายหลายพาเลทพร้อมกัน (ได้ใบส่งของรวม) ใช้ปุ่ม "🚚 ขายหลายพาเลท" ในหน้ารายการ</p>' +
+    '<div class="actions"><button class="btn" id="mCancel">ยกเลิก</button><button class="btn primary" id="mOk">ยืนยันขาย</button></div>');
   $('mCancel').onclick = function () { openScrapDetail(r); };
   $('mOk').onclick = function () { this.disabled = true; scrapSetStatusUi(r, 'shipped', { ship_ref: $('shRef').value.trim() }); };
 }
@@ -420,22 +482,24 @@ function exportScrapExcel() {
     var d = res[1];
     if (!d.rows.length) { done(); toast('ไม่มีข้อมูลตามตัวกรอง'); return; }
     var rows = d.rows.slice().reverse().map(function (r) {
-      return { 'เลขพาเลท': r.pallet_id, 'วันที่พาเลท': scrapDay(r.pallet_date), 'ลำดับ': r.seq, 'ประเภท': r.scrap_type, 'ที่มา': r.source,
+      return { 'เลขพาเลท': r.pallet_id, 'วันที่พาเลท': scrapDay(r.pallet_date), 'ลำดับ': r.seq, 'แผนก': r.department, 'ประเภท': r.scrap_type, 'ที่มา': r.source,
         'น้ำหนัก (kg)': r.weight_kg, 'น้ำหนักเดิม (kg)': r.weight_original !== r.weight_kg ? r.weight_original : '', 'สถานะ': (SCRAP_ST[r.status] || [r.status])[0],
         'หมายเหตุ': r.note, 'ผู้สร้าง': r.created_by, 'สร้างเมื่อ': r.created_at, 'เครื่อง': r.device,
-        'ปิดโดย': r.closed_by, 'ปิดเมื่อ': r.closed_at, 'ส่งออกโดย': r.shipped_by, 'ส่งออกเมื่อ': r.shipped_at, 'เอกสาร/ผู้รับซื้อ': r.ship_ref,
+        'ปิดโดย': r.closed_by, 'ปิดเมื่อ': r.closed_at, 'ขายโดย': r.shipped_by, 'ขายเมื่อ': r.shipped_at, 'เอกสาร/ผู้รับซื้อ': r.ship_ref, 'ชุดใบส่งของ': r.ship_batch,
         'แก้ไขล่าสุดโดย': r.updated_by, 'แก้ไขล่าสุดเมื่อ': r.updated_at, 'ลบโดย': r.deleted_by, 'ลบเมื่อ': r.deleted_at, 'เหตุผลลบ': r.delete_reason,
         'จำนวนรูป': (r.photos || []).length, 'ลิงก์รูป (Google Drive)': (r.photo_urls || []).join(' \n') };
     });
     var wb = XLSX.utils.book_new();
     var ws = XLSX.utils.json_to_sheet(rows);
-    ws['!cols'] = [13, 11, 6, 16, 18, 11, 11, 11, 24, 14, 19, 10, 14, 19, 14, 19, 18, 14, 19, 12, 19, 16, 8, 60].map(function (w) { return { wch: w }; });
+    ws['!cols'] = [13, 11, 6, 18, 16, 18, 11, 11, 11, 24, 14, 19, 10, 14, 19, 14, 19, 18, 26, 14, 19, 12, 19, 16, 8, 60].map(function (w) { return { wch: w }; });
     ws['!autofilter'] = { ref: ws['!ref'] };
     XLSX.utils.book_append_sheet(wb, ws, 'พาเลท');
 
     var live = d.rows.filter(function (r) { return r.status !== 'deleted'; });
-    var byType = {}, byDay = {};
+    var byType = {}, byDay = {}, byDept = {};
     live.forEach(function (r) {
+      var dp = byDept[r.department || '-'] || (byDept[r.department || '-'] = { n: 0, kg: 0, sold: 0, stock: 0 });
+      dp.n++; dp.kg += r.weight_kg || 0; if (r.status === 'shipped') dp.sold += r.weight_kg || 0; else dp.stock += r.weight_kg || 0;
       var t = byType[r.scrap_type || '-'] || (byType[r.scrap_type || '-'] = { n: 0, kg: 0, nw: 0, open: 0, closed: 0, shipped: 0 });
       t.n++; t[r.status] = (t[r.status] || 0) + 1;
       if (r.weight_kg === '') t.nw++; else t.kg += r.weight_kg;
@@ -446,13 +510,17 @@ function exportScrapExcel() {
     var r3 = function (x) { return Math.round(x * 1000) / 1000; };
     var trows = Object.keys(byType).sort().map(function (k) {
       var t = byType[k];
-      return { 'ประเภท': k, 'จำนวนพาเลท': t.n, 'น้ำหนักรวม (kg)': r3(t.kg), 'ยังไม่ชั่ง': t.nw, 'เปิดอยู่': t.open || 0, 'ปิดแล้ว': t.closed || 0, 'ส่งออกแล้ว': t.shipped || 0 };
+      return { 'ประเภท': k, 'จำนวนพาเลท': t.n, 'น้ำหนักรวม (kg)': r3(t.kg), 'ยังไม่ชั่ง': t.nw, 'เปิดอยู่': t.open || 0, 'ปิดแล้ว': t.closed || 0, 'ขายแล้ว': t.shipped || 0 };
     });
     trows.push({ 'ประเภท': 'รวม', 'จำนวนพาเลท': live.length, 'น้ำหนักรวม (kg)': r3(live.reduce(function (s, r) { return s + (r.weight_kg || 0); }, 0)),
       'ยังไม่ชั่ง': live.filter(function (r) { return r.weight_kg === ''; }).length });
     var ws2 = XLSX.utils.json_to_sheet(trows);
     ws2['!cols'] = [18, 12, 15, 10, 9, 9, 11].map(function (w) { return { wch: w }; });
     XLSX.utils.book_append_sheet(wb, ws2, 'สรุปตามประเภท');
+    var prow = Object.keys(byDept).sort().map(function (k) { var x = byDept[k]; return { 'แผนก': k, 'จำนวนพาเลท': x.n, 'น้ำหนักรวม (kg)': r3(x.kg), 'ขายแล้ว (kg)': r3(x.sold), 'ยังไม่ขาย (kg)': r3(x.stock) }; });
+    var wsD = XLSX.utils.json_to_sheet(prow);
+    wsD['!cols'] = [24, 12, 15, 13, 14].map(function (w) { return { wch: w }; });
+    XLSX.utils.book_append_sheet(wb, wsD, 'สรุปตามแผนก');
     var drows = Object.keys(byDay).sort().map(function (k) { var x = byDay[k]; return { 'วันที่': scrapDay(x.day), 'ประเภท': x.type, 'จำนวนพาเลท': x.n, 'น้ำหนักรวม (kg)': r3(x.kg) }; });
     var ws3 = XLSX.utils.json_to_sheet(drows.length ? drows : [{ 'วันที่': '(ไม่มีข้อมูล)' }]);
     ws3['!cols'] = [12, 18, 12, 15].map(function (w) { return { wch: w }; });
@@ -463,7 +531,7 @@ function exportScrapExcel() {
   }, function (err) { done(); toast(err.message === 'load failed' ? 'โหลดตัวสร้าง Excel ไม่ได้ (ต้องต่ออินเทอร์เน็ต)' : err.message, 3500); });
 }
 function scrapRangeName(f) {
-  return f.dateFrom || f.dateTo ? (f.dateFrom || '…').replace(/-/g, '') + (f.dateTo && f.dateTo !== f.dateFrom ? '-' + f.dateTo.replace(/-/g, '') : '') : 'ทั้งหมด';
+  return f.dateFrom || f.dateTo ? (f.dateFrom || 'start').replace(/-/g, '') + (f.dateTo && f.dateTo !== f.dateFrom ? '-' + f.dateTo.replace(/-/g, '') : '') : 'all';
 }
 function scrapStamp() { var n = new Date(); return n.getFullYear() + pad(n.getMonth() + 1) + pad(n.getDate()) + '-' + pad(n.getHours()) + pad(n.getMinutes()); }
 function scrapRangeText(f) {
@@ -508,7 +576,7 @@ function scrapPdfPages(pages, filename, opt, btn) {
     els.slice(1).forEach(function (el) {
       w = w.get('pdf').then(function (pdf) { pdf.addPage(); }).from(el).toContainer().toCanvas().toPdf();
     });
-    return w.save().then(function () { document.body.removeChild(host); done(); toast('ดาวน์โหลด ' + filename, 3000); },
+    return w.save(filename).then(function () { document.body.removeChild(host); done(); toast('ดาวน์โหลด ' + filename, 3000); },
       function (err) { if (host.parentNode) document.body.removeChild(host); throw err; });
   }).catch(function (err) {
     done();
@@ -534,12 +602,12 @@ function scrapFoot(page, total) {
 function scrapNowText() { var n = new Date(); return pad(n.getDate()) + '/' + pad(n.getMonth() + 1) + '/' + n.getFullYear() + ' ' + pad(n.getHours()) + ':' + pad(n.getMinutes()); }
 function scrapInfoTable(r) {
   function tr(k, v) { return '<tr><th style="width:120px">' + k + '</th><td>' + (v || '-') + '</td></tr>'; }
-  return '<table>' + tr('ประเภท', esc(r.scrap_type)) + tr('ที่มา', esc(r.source)) +
+  return '<table>' + tr('แผนก', esc(r.department)) + tr('ประเภท', esc(r.scrap_type)) + tr('ที่มา', esc(r.source)) +
     tr('น้ำหนัก', r.weight_kg === '' ? 'ยังไม่ชั่ง' : '<b style="font-size:15px">' + esc(scrapFmtKg(r.weight_kg)) + '</b>' + (r.weight_original !== '' && r.weight_original !== r.weight_kg ? ' (เดิม ' + esc(scrapFmtKg(r.weight_original)) + ')' : '')) +
     tr('สถานะ', esc((SCRAP_ST[r.status] || [r.status])[0])) + tr('หมายเหตุ', esc(r.note)) +
     tr('สร้าง', esc(r.created_by) + ' · ' + esc(r.created_at)) +
     (r.closed_at ? tr('ปิดพาเลท', esc(r.closed_by) + ' · ' + esc(r.closed_at)) : '') +
-    (r.shipped_at ? tr('ส่งออก', esc(r.shipped_by) + ' · ' + esc(r.shipped_at) + (r.ship_ref ? ' · ' + esc(r.ship_ref) : '')) : '') + '</table>';
+    (r.shipped_at ? tr('ขาย', esc(r.shipped_by) + ' · ' + esc(r.shipped_at) + (r.ship_ref ? ' · ' + esc(r.ship_ref) : '')) : '') + '</table>';
 }
 
 // โหลดรูปเป็น data URL (ทีละ 3 รูปพร้อมกัน)
@@ -557,6 +625,7 @@ function scrapLabelPdf(r, btn) {
   scrapQrDataUrl(r.pallet_id).then(function (qr) {
     var page = '<div class="pdfl"><div class="l"><div class="t">SCRAP PALLET</div><div class="id">' + esc(r.pallet_id) + '</div>' +
       '<div class="f">ประเภท: <b>' + esc(r.scrap_type || '-') + '</b></div>' +
+      (r.department ? '<div class="f">แผนก: ' + esc(r.department) + '</div>' : '') +
       (r.source ? '<div class="f">ที่มา: ' + esc(r.source) + '</div>' : '') +
       '<div class="f">วันที่: ' + esc(scrapDay(r.pallet_date)) + ' · ' + esc(r.created_by) + '</div>' +
       '<div class="w">น้ำหนัก: ' + (r.weight_kg === '' ? '______________ kg' : '<b>' + esc(scrapFmtKg(r.weight_kg)) + '</b>') + '</div></div>' +
@@ -582,6 +651,119 @@ function scrapPalletPdf(r, btn) {
     }
     scrapPdfPages(pages, 'Scrap_' + r.pallet_id + '.pdf', {}, btn);
   }, function (err) { if (btn) btn.textContent = label; toast(err.message, 3500); });
+}
+
+// ---------- ขายหลายพาเลทพร้อมกัน ----------
+function openScrapShipMany() {
+  if (!S.user) { openUserModal(); return; }
+  openModal('<h3>🚚 ขายหลายพาเลท</h3><div id="smOut" class="center muted pad">กำลังโหลดพาเลทที่ปิดแล้ว…</div>' +
+    '<div class="actions"><button class="btn" id="mCancel">ยกเลิก</button></div>');
+  $('mCancel').onclick = closeModal;
+  api('scrapList', { status: 'closed', limit: 2000 }).then(function (d) {
+    if (!$('smOut')) return;
+    var rows = d.rows.slice().reverse(); // เก่าก่อน (ขายของเก่าก่อน)
+    if (!rows.length) { $('smOut').className = 'empty-list muted'; $('smOut').textContent = 'ไม่มีพาเลทที่ปิดแล้ว (พร้อมขาย)'; return; }
+    var types = {}; rows.forEach(function (r) { types[r.scrap_type || '-'] = 1; });
+    var sh = $('modal').querySelector('.sheet');
+    sh.innerHTML = '<h3>🚚 ขายหลายพาเลท</h3>' +
+      '<p class="muted small">เลือกพาเลทที่ "ปิดแล้ว" ที่จะขายพร้อมกัน → ได้ใบส่งของ (PDF) ใบเดียว · พาเลทที่ขายแล้วจะถูกล็อก</p>' +
+      '<div class="seg"><button type="button" data-smt="*">เลือกทั้งหมด</button><button type="button" data-smt="">ไม่เลือก</button>' +
+        Object.keys(types).sort().map(function (t) { return '<button type="button" data-smt="' + esc(t) + '">+ ' + esc(t) + '</button>'; }).join('') + '</div>' +
+      '<div class="sm-list">' + rows.map(function (r) {
+        return '<label class="sm-item"><input type="checkbox" data-smid="' + esc(r.pallet_id) + '" data-kg="' + (r.weight_kg || 0) + '" data-type="' + esc(r.scrap_type || '-') + '">' +
+          '<span class="sm-main"><b>' + esc(r.pallet_id) + '</b> <span class="loc-pill">' + esc(r.scrap_type || '-') + '</span>' +
+          (r.department ? ' <span class="dept-pill">' + esc(r.department) + '</span>' : '') + '<br><span class="muted small">ปิด ' + esc(String(r.closed_at).slice(0, 16)) + '</span></span>' +
+          '<span class="sm-kg">' + esc(scrapFmtKg(r.weight_kg)) + '</span></label>';
+      }).join('') + '</div>' +
+      '<div class="sm-sum" id="smSum"></div>' +
+      '<label>เลขที่เอกสาร / ผู้รับซื้อ</label><input id="smRef" class="field" autocomplete="off" placeholder="เช่น INV-0001 / ร้าน ก.">' +
+      '<div class="actions"><button class="btn" id="mCancel">ยกเลิก</button><button class="btn primary" id="mOk" disabled>ยืนยันขาย</button></div>';
+    var boxes = Array.prototype.slice.call(sh.querySelectorAll('[data-smid]'));
+    function sum() {
+      var sel = boxes.filter(function (b) { return b.checked; }), kg = sel.reduce(function (t, b) { return t + Number(b.getAttribute('data-kg')); }, 0);
+      $('smSum').innerHTML = 'เลือก <b>' + sel.length + '</b> / ' + boxes.length + ' พาเลท · รวม <b>' + esc(scrapFmtKg(Math.round(kg * 1000) / 1000) || '0 kg') + '</b>';
+      $('mOk').disabled = !sel.length;
+      $('mOk').textContent = sel.length ? 'ยืนยันขาย ' + sel.length + ' พาเลท' : 'ยืนยันขาย';
+      return sel;
+    }
+    boxes.forEach(function (b) { b.onchange = sum; });
+    Array.prototype.forEach.call(sh.querySelectorAll('[data-smt]'), function (b) {
+      b.onclick = function () {
+        var t = b.getAttribute('data-smt');
+        boxes.forEach(function (x) { if (t === '*' || t === '') x.checked = t === '*'; else if (x.getAttribute('data-type') === t) x.checked = true; });
+        sum();
+      };
+    });
+    sum();
+    $('mCancel').onclick = closeModal;
+    $('mOk').onclick = function () {
+      var sel = sum(), ref = $('smRef').value.trim();
+      if (!ref) { toast('กรุณาใส่เลขที่เอกสาร / ผู้รับซื้อ'); $('smRef').focus(); return; }
+      var btn = $('mOk'); btn.disabled = true; btn.textContent = 'กำลังบันทึก…';
+      api('scrapShipMany', sel.map(function (b) { return b.getAttribute('data-smid'); }), S.user, { ship_ref: ref }).then(function (res) {
+        beep(true);
+        loadScrap();
+        var kg = res.rows.reduce(function (t, r) { return t + (r.weight_kg || 0); }, 0);
+        openModal('<div class="msg ok">✅ บันทึกขายแล้ว ' + res.rows.length + ' พาเลท · ' + esc(scrapFmtKg(Math.round(kg * 1000) / 1000)) + '</div>' +
+          '<div class="card-lite small">📄 ' + esc(res.ship_ref) + '<br>ชุด ' + esc(res.ship_batch) + '<br>' + esc(res.shipped_at) + ' · ' + esc(res.shipped_by) + '</div>' +
+          '<div class="actions wrap"><button class="btn primary" id="smPdf">🧾 ใบส่งของ (PDF)</button></div>' +
+          '<div class="actions"><button class="btn" id="mCancel">ปิด</button></div>');
+        $('mCancel').onclick = closeModal;
+        $('smPdf').onclick = function () { scrapDeliveryPdf(res, res.rows, this); };
+      }, function (err) { beep(false); btn.disabled = false; sum(); toast(err.message, 4500); });
+    };
+  }, function (err) { if ($('smOut')) { $('smOut').className = 'msg err'; $('smOut').textContent = err.message; } });
+}
+
+// ใบส่งของของชุดที่ขายไปแล้ว (พิมพ์ซ้ำจากหน้าพาเลท)
+function scrapBatchPdf(batch, btn) {
+  var label = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'กำลังโหลด…'; }
+  api('scrapList', { ship_batch: batch, limit: 2000 }).then(function (d) {
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+    var rows = d.rows.filter(function (r) { return r.status === 'shipped'; });
+    if (!rows.length) { toast('ไม่พบพาเลทในชุดนี้'); return; }
+    var r0 = rows[0];
+    scrapDeliveryPdf({ ship_batch: batch, ship_ref: r0.ship_ref, shipped_at: r0.shipped_at, shipped_by: r0.shipped_by }, rows, btn);
+  }, function (err) { if (btn) { btn.disabled = false; btn.textContent = label; } toast(err.message, 3500); });
+}
+
+function scrapDeliveryPdf(info, rows, btn) {
+  rows = rows.slice().sort(function (a, b) { return a.pallet_id < b.pallet_id ? -1 : 1; });
+  var kg = 0, byType = {};
+  rows.forEach(function (r) { kg += r.weight_kg || 0; var t = byType[r.scrap_type || '-'] || (byType[r.scrap_type || '-'] = { n: 0, kg: 0 }); t.n++; t.kg += r.weight_kg || 0; });
+  var n3 = function (v) { return esc(Number(Math.round(v * 1000) / 1000).toLocaleString('en-US', { maximumFractionDigits: 3 })); };
+  var head = '<div class="hd"><div><h1>ใบส่งของ Scrap</h1><div class="mut">Scrap Delivery Note</div></div>' +
+    '<div style="text-align:right">เลขที่เอกสาร / ผู้รับซื้อ: <b>' + esc(info.ship_ref) + '</b><br>วันที่ขาย: ' + esc(info.shipped_at) + '<br>ผู้บันทึก: ' + esc(info.shipped_by) +
+    '<br><span class="mut">ชุด ' + esc(info.ship_batch) + '</span></div></div>';
+  var summary = '<h2>สรุปตามประเภท</h2><table><tr><th>ประเภท</th><th class="n">พาเลท</th><th class="n">น้ำหนัก (kg)</th></tr>' +
+    Object.keys(byType).sort().map(function (k) { return '<tr><td>' + esc(k) + '</td><td class="n">' + byType[k].n + '</td><td class="n">' + n3(byType[k].kg) + '</td></tr>'; }).join('') +
+    '<tr class="tot"><td>รวมทั้งสิ้น</td><td class="n">' + rows.length + '</td><td class="n">' + n3(kg) + '</td></tr></table>';
+  var th = '<tr><th>#</th><th>เลขพาเลท</th><th>ประเภท</th><th>แผนก</th><th class="n">น้ำหนัก (kg)</th><th>หมายเหตุ</th></tr>';
+  var sig = '<div class="sig"><div>ผู้ส่งของ</div><div>ผู้ตรวจสอบ / รปภ.</div><div>ผู้รับซื้อ / ผู้รับของ</div></div>';
+  // หน้าสุดท้ายต้องมีที่ว่างสำหรับสรุป + ช่องเซ็น
+  var first = 18, per = 30, chunks = [rows.slice(0, first)];
+  for (var i = first; i < rows.length; i += per) chunks.push(rows.slice(i, i + per));
+  var total = chunks.length, idx = 0, pages = chunks.map(function (c, ci) {
+    var last = ci === chunks.length - 1;
+    return '<div class="pdfp">' + (ci === 0 ? head : '<h2>ใบส่งของ ' + esc(info.ship_ref) + ' (ต่อ)</h2>') +
+      '<h2>รายการพาเลท (' + rows.length + ')</h2><table>' + th + c.map(function (r) {
+        idx++;
+        return '<tr><td>' + idx + '</td><td><b>' + esc(r.pallet_id) + '</b></td><td>' + esc(r.scrap_type) + '</td><td>' + esc(r.department) + '</td><td class="n">' + n3(r.weight_kg || 0) + '</td><td>' + esc(r.note) + '</td></tr>';
+      }).join('') + (last ? '<tr class="tot"><td colspan="4">รวม</td><td class="n">' + n3(kg) + '</td><td></td></tr>' : '') + '</table>' +
+      (last ? summary + sig : '') + scrapFoot(ci + 1, total) + '</div>';
+  });
+  // หน้าสุดท้ายแถวเยอะ → สรุป/ช่องเซ็นแยกหน้าใหม่ (กันล้นหน้า)
+  var lastRows = chunks[chunks.length - 1].length;
+  if (lastRows > (chunks.length === 1 ? 14 : 24)) {
+    pages[pages.length - 1] = pages[pages.length - 1].replace(summary + sig, '');
+    total++;
+    pages = pages.map(function (pg, k) { return pg.replace(/หน้า (\d+)\/\d+/, 'หน้า $1/' + total); });
+    pages.push('<div class="pdfp"><h2>ใบส่งของ ' + esc(info.ship_ref) + ' — สรุป</h2>' + summary + sig + scrapFoot(total, total) + '</div>');
+  }
+  // ชื่อไฟล์ใช้แต่ตัวอักษรอังกฤษ/ตัวเลข (Chrome บางเครื่องทิ้งชื่อไฟล์ที่มีภาษาไทย → ได้ไฟล์ชื่อ download)
+  var ref = String(info.ship_ref || '').replace(/[^A-Za-z0-9-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 30);
+  scrapPdfPages(pages, 'DeliveryNote_' + (ref ? ref + '_' : '') + String(info.ship_batch || '').replace(/^SHIP-/, '') + '.pdf', {}, btn);
 }
 
 function openScrapPdfMenu() {
@@ -618,13 +800,13 @@ function scrapReportPages(f, d, rows, ph) {
   var filt = [scrapRangeText(f), f.status ? 'สถานะ: ' + SCRAP_ST[f.status][0] : '', f.type ? 'ประเภท: ' + f.type : '', f.q ? 'ค้นหา: ' + f.q : ''].filter(String).join(' · ');
   var head = '<div class="hd"><div><h1>รายงาน Scrap</h1><div class="mut">' + esc(filt) + '</div></div><div class="mut" style="text-align:right">พิมพ์ ' + esc(scrapNowText()) + '<br>โดย ' + esc(S.user) + '</div></div>';
   var summary = '<div class="kpi"><div>จำนวนพาเลท<b>' + d.total + '</b></div><div>น้ำหนักรวม<b>' + esc(scrapFmtKg(d.totalKg) || '0 kg') + '</b></div>' +
-      '<div>ยังไม่ชั่ง<b>' + d.noWeight + '</b></div><div>เปิด / ปิด / ส่งออก<b>' + (d.byStatus.open || 0) + ' / ' + (d.byStatus.closed || 0) + ' / ' + (d.byStatus.shipped || 0) + '</b></div></div>' +
+      '<div>ยังไม่ชั่ง<b>' + d.noWeight + '</b></div><div>เปิด / ปิด / ขาย<b>' + (d.byStatus.open || 0) + ' / ' + (d.byStatus.closed || 0) + ' / ' + (d.byStatus.shipped || 0) + '</b></div></div>' +
     '<h2>สรุปตามประเภท</h2><table><tr><th>ประเภท</th><th class="n">พาเลท</th><th class="n">น้ำหนัก (kg)</th><th class="n">สัดส่วน</th></tr>' +
       types.map(function (k) { var t = d.byType[k]; return '<tr><td>' + esc(k) + '</td><td class="n">' + t.n + '</td><td class="n">' + esc(Number(t.kg).toLocaleString('en-US', { maximumFractionDigits: 3 })) + '</td><td class="n">' + (d.totalKg ? Math.round(t.kg / d.totalKg * 1000) / 10 : 0) + '%</td></tr>'; }).join('') +
       '<tr class="tot"><td>รวม</td><td class="n">' + d.total + '</td><td class="n">' + esc(Number(d.totalKg).toLocaleString('en-US', { maximumFractionDigits: 3 })) + '</td><td class="n">100%</td></tr></table>';
-  var th = '<tr><th>#</th><th>เลขพาเลท</th><th>ประเภท</th><th>ที่มา</th><th class="n">น้ำหนัก (kg)</th><th>สถานะ</th><th>ผู้สร้าง / เวลา</th><th class="n">รูป</th><th>หมายเหตุ</th></tr>';
+  var th = '<tr><th>#</th><th>เลขพาเลท</th><th>ประเภท</th><th>แผนก / ที่มา</th><th class="n">น้ำหนัก (kg)</th><th>สถานะ</th><th>ผู้สร้าง / เวลา</th><th class="n">รูป</th><th>หมายเหตุ</th></tr>';
   function tr(r, i) {
-    return '<tr><td>' + (i + 1) + '</td><td><b>' + esc(r.pallet_id) + '</b></td><td>' + esc(r.scrap_type) + '</td><td>' + esc(r.source) + '</td>' +
+    return '<tr><td>' + (i + 1) + '</td><td><b>' + esc(r.pallet_id) + '</b></td><td>' + esc(r.scrap_type) + '</td><td>' + esc(r.department) + (r.source ? '<br><span class="mut">' + esc(r.source) + '</span>' : '') + '</td>' +
       '<td class="n">' + (r.weight_kg === '' ? '<i>ยังไม่ชั่ง</i>' : esc(Number(r.weight_kg).toLocaleString('en-US', { maximumFractionDigits: 3 }))) + '</td>' +
       '<td>' + esc((SCRAP_ST[r.status] || [r.status])[0]) + (r.ship_ref ? '<br>' + esc(r.ship_ref) : '') + '</td><td>' + esc(r.created_by) + '<br><span class="mut">' + esc(r.created_at.slice(0, 16)) + '</span></td>' +
       '<td class="n">' + (r.photos || []).length + '</td><td>' + esc(r.note) + '</td></tr>';
