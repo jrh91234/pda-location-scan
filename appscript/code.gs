@@ -19,7 +19,9 @@ const MAX_BATCH = 50;
 const API_ACTIONS = { ping: ping, saveScans: saveScans, listScans: listScans, deleteScan: deleteScan, updateQty: updateQty, updateLocation: updateLocation, findByQr: findByQr, findSamePkg: findSamePkg, findPackage: findPackage, getScans: getScans, getTimeline: getTimeline, getPartPackages: getPartPackages, getLocationMap: getLocationMap, getLocationEvents: getLocationEvents,
   uploadPhoto: uploadPhoto, getPhoto: getPhoto, deletePhoto: deletePhoto,
   getCountState: getCountState, setCountRound: setCountRound, markBinCounted: markBinCounted, getKingdeeMoves: getKingdeeMoves, getBinAges: getBinAges,
-  getCountProfile: getCountProfile, saveCountProfile: saveCountProfile, saveCountSample: saveCountSample };
+  getCountProfile: getCountProfile, saveCountProfile: saveCountProfile, saveCountSample: saveCountSample,
+  scrapCreate: scrapCreate, scrapList: scrapList, scrapGet: scrapGet, scrapUpdate: scrapUpdate, scrapSetStatus: scrapSetStatus,
+  scrapDelete: scrapDelete, scrapTimeline: scrapTimeline };
 
 function doPost(e) {
   let out;
@@ -51,6 +53,7 @@ function setupFromMenu() {
   setup_();
   photoSheet_();
   logSheet_();
+  scrapSheet_();
   const folder = photoFolder_(); // ขอสิทธิ์ Google Drive สำหรับเก็บรูป
   SpreadsheetApp.getUi().alert('พร้อมใช้งาน: ชีต "' + SHEET_NAME + '", "' + PHOTO_SHEET + '" และโฟลเดอร์รูป "' + folder.getName() + '"');
 }
@@ -572,8 +575,9 @@ function uploadPhoto(p) {
     if (existing) return { photo_id: id, scan_id: String(existing.scan_id), result: 'exists' };
 
     const scan = readAll_(sheet_()).filter(function (r) { return String(r.scan_id) === scanId; })[0];
-    const loc = scan ? String(scan.location) : '';
-    const part = scan ? String(scan.part_code) : '';
+    const pallet = scan ? null : scrapFind_(scanId); // รูปของพาเลท Scrap ใช้ระบบรูปเดียวกัน (scan_id = เลขพาเลท)
+    const loc = scan ? String(scan.location) : pallet ? 'SCRAP' : '';
+    const part = scan ? String(scan.part_code) : pallet ? scanId : '';
     const now = new Date();
     const name = [loc || 'NOLOC', (part || 'item').replace(/[\/:*?"<>|]/g, '_').slice(0, 40),
                   Utilities.formatDate(now, TZ, 'yyyyMMdd-HHmmss'), id.slice(0, 6)].join('_') + (mime === 'image/png' ? '.png' : '.jpg');
@@ -581,7 +585,8 @@ function uploadPhoto(p) {
     const rec = { photo_id: id, scan_id: scanId, location: loc, part_code: part, file_id: file.getId(), file_url: file.getUrl(),
                   uploaded_at: now, uploaded_by: by, status: 'active', deleted_by: '', deleted_at: '' };
     sh.getRange(sh.getLastRow() + 1, 1, 1, PHOTO_HEADERS.length).setValues([PHOTO_HEADERS.map(function (h) { return rec[h]; })]);
-    logEvents_([{ scan_id: scanId, event: 'photo_add', part_code: part, location_to: loc, by: by, at: now, ref: id }]);
+    if (pallet) scrapLog_([{ pallet_id: scanId, event: 'photo_add', by: by, at: now, ref: id }]);
+    else logEvents_([{ scan_id: scanId, event: 'photo_add', part_code: part, location_to: loc, by: by, at: now, ref: id }]);
     return { photo_id: id, scan_id: scanId, result: 'saved' };
   } finally {
     lock.releaseLock();
@@ -611,7 +616,8 @@ function deletePhoto(photoId, deletedBy) {
     if (String(row.status) !== 'deleted') {
       sh.getRange(row._row, PHOTO_HEADERS.indexOf('status') + 1, 1, 3).setValues([['deleted', by, new Date()]]);
       try { DriveApp.getFileById(String(row.file_id)).setTrashed(true); } catch (e) { /* ไฟล์หายไปแล้ว */ }
-      logEvents_([{ scan_id: String(row.scan_id), event: 'photo_delete', part_code: String(row.part_code), location_to: String(row.location),
+      if (String(row.location) === 'SCRAP') scrapLog_([{ pallet_id: String(row.scan_id), event: 'photo_delete', by: by, at: new Date(), ref: id }]);
+      else logEvents_([{ scan_id: String(row.scan_id), event: 'photo_delete', part_code: String(row.part_code), location_to: String(row.location),
                     by: by, at: new Date(), ref: id }]);
     }
     return { photo_id: id, status: 'deleted' };
@@ -1084,4 +1090,279 @@ function saveCountSample(p) {
     now, part, Number(p.count) || 0, Number(p.auto) || 0, Number(p.added) || 0, Number(p.removed) || 0, Number(p.thr) || 0,
     clean_(p.by, 60), file.getId(), file.getUrl(), Number(p.w) || 0, Number(p.h) || 0, Number(p.objW) || 0, Number(p.objH) || 0, pts]]);
   return { file_id: file.getId(), at: fmt_(now) };
+}
+
+// ======================= Scrap (พาเลทเศษวัสดุ) =======================
+// เลขพาเลท = วันที่ (ddMMyyyy เวลาไทย) + "-" + ลำดับของวันนั้น เช่น 11062026-1 — เซิร์ฟเวอร์ออกเลขภายใน lock จึงไม่ซ้ำข้ามเครื่อง
+// สถานะ: open (กำลังใส่ของ) → closed (ปิด/ชั่งแล้ว) → shipped (ส่งขาย/ส่งออกแล้ว) · ลบ = soft delete (status = deleted)
+// เลขที่ลบแล้วไม่นำกลับมาใช้ใหม่ · ทุกการเปลี่ยนแปลงเพิ่มแถวในชีต ScrapLog · รูปเก็บในชีต Photos (scan_id = เลขพาเลท, location = SCRAP)
+const SCRAP_SHEET = 'Scrap';
+const SCRAP_HEADERS = ['pallet_id', 'pallet_date', 'seq', 'created_at', 'created_by', 'device', 'scrap_type', 'source', 'weight_kg', 'note',
+                       'status', 'updated_by', 'updated_at', 'weight_original', 'closed_by', 'closed_at', 'shipped_by', 'shipped_at', 'ship_ref',
+                       'deleted_by', 'deleted_at', 'delete_reason', 'client_id'];
+const SCRAP_TEXT_COLS = ['pallet_id', 'pallet_date', 'created_by', 'device', 'scrap_type', 'source', 'note', 'ship_ref', 'client_id'];
+const SCRAP_LOG_SHEET = 'ScrapLog';
+const SCRAP_LOG_HEADERS = ['at', 'pallet_id', 'event', 'by', 'field', 'from', 'to', 'note', 'ref'];
+const SCRAP_STATUS = { open: 1, closed: 1, shipped: 1 };
+const MAX_SCRAP_KG = 100000;
+
+function scrapSheet_() {
+  const sh = cntSheet_(SCRAP_SHEET, SCRAP_HEADERS, SCRAP_TEXT_COLS);
+  if (sh.getLastColumn() < SCRAP_HEADERS.length) sh.getRange(1, 1, 1, SCRAP_HEADERS.length).setValues([SCRAP_HEADERS]);
+  return sh;
+}
+
+function scrapRead_(sh) {
+  const n = sh.getLastRow() - 1;
+  if (n <= 0) return [];
+  return sh.getRange(2, 1, n, SCRAP_HEADERS.length).getValues().map(function (r, i) {
+    const o = { _row: i + 2 };
+    SCRAP_HEADERS.forEach(function (h, j) { o[h] = r[j]; });
+    return o;
+  });
+}
+
+function scrapFind_(id) {
+  id = clean_(id, 40);
+  if (!id) return null;
+  const sh = book_().getSheetByName(SCRAP_SHEET);
+  if (!sh) return null;
+  return scrapRead_(sh).filter(function (r) { return String(r.pallet_id) === id; })[0] || null;
+}
+
+function scrapNum_(v) { return v === '' || v == null || isNaN(Number(v)) ? '' : Number(v); }
+
+function scrapToClient_(o) {
+  return {
+    pallet_id: String(o.pallet_id), pallet_date: String(o.pallet_date instanceof Date ? Utilities.formatDate(o.pallet_date, TZ, 'yyyy-MM-dd') : o.pallet_date),
+    seq: Number(o.seq) || 0, created_at: fmt_(o.created_at), created_by: String(o.created_by || ''), device: String(o.device || ''),
+    scrap_type: String(o.scrap_type || ''), source: String(o.source || ''), weight_kg: scrapNum_(o.weight_kg), note: String(o.note || ''),
+    status: String(o.status || 'open'), updated_by: String(o.updated_by || ''), updated_at: fmt_(o.updated_at),
+    weight_original: scrapNum_(o.weight_original), closed_by: String(o.closed_by || ''), closed_at: fmt_(o.closed_at),
+    shipped_by: String(o.shipped_by || ''), shipped_at: fmt_(o.shipped_at), ship_ref: String(o.ship_ref || ''),
+    deleted_by: String(o.deleted_by || ''), deleted_at: fmt_(o.deleted_at), delete_reason: String(o.delete_reason || '')
+  };
+}
+
+function scrapWeight_(v) {
+  if (v === '' || v == null) return '';
+  const n = Number(String(v).replace(/,/g, ''));
+  if (isNaN(n) || n < 0 || n > MAX_SCRAP_KG) throw new Error('น้ำหนักไม่ถูกต้อง (0 – ' + MAX_SCRAP_KG + ' kg)');
+  return Math.round(n * 1000) / 1000;
+}
+
+function scrapWrite_(sh, row) {
+  sh.getRange(row._row, 1, 1, SCRAP_HEADERS.length).setValues([SCRAP_HEADERS.map(function (h) { return row[h] === undefined || row[h] === null ? '' : row[h]; })]);
+}
+
+function scrapLog_(events) {
+  if (!events || !events.length) return;
+  try {
+    const sh = cntSheet_(SCRAP_LOG_SHEET, SCRAP_LOG_HEADERS, ['pallet_id', 'event', 'by', 'field', 'from', 'to', 'ref']);
+    sh.getRange(sh.getLastRow() + 1, 1, events.length, SCRAP_LOG_HEADERS.length).setValues(events.map(function (e) {
+      return SCRAP_LOG_HEADERS.map(function (h) { if (h === 'at') return e.at || new Date(); const v = e[h]; return v === undefined || v === null ? '' : String(v); });
+    }));
+  } catch (err) {
+    console.error('scrapLog_ failed: ' + err);
+  }
+}
+
+function scrapLocked_(fn) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try { return fn(scrapSheet_()); } finally { lock.releaseLock(); }
+}
+
+function scrapRow_(sh, id) {
+  id = clean_(id, 40);
+  const row = scrapRead_(sh).filter(function (r) { return String(r.pallet_id) === id; })[0];
+  if (!row) throw new Error('ไม่พบพาเลท ' + id);
+  return row;
+}
+
+/** สร้างพาเลทใหม่ p: { by, device, scrap_type, source, weight_kg, note, client_id } — client_id เดิมส่งซ้ำได้ (ไม่สร้างพาเลทซ้ำ) */
+function scrapCreate(p) {
+  p = p || {};
+  const by = clean_(p.by, 60);
+  if (!by) throw new Error('กรุณาระบุชื่อผู้สร้าง');
+  const weight = scrapWeight_(p.weight_kg);
+  const clientId = clean_(p.client_id, 64);
+  return scrapLocked_(function (sh) {
+    const rows = scrapRead_(sh);
+    if (clientId) {
+      const same = rows.filter(function (r) { return String(r.client_id) === clientId; })[0];
+      if (same) return scrapToClient_(same);
+    }
+    const now = new Date();
+    const day = Utilities.formatDate(now, TZ, 'yyyy-MM-dd');
+    let seq = 0;
+    rows.forEach(function (r) {
+      const d = r.pallet_date instanceof Date ? Utilities.formatDate(r.pallet_date, TZ, 'yyyy-MM-dd') : String(r.pallet_date);
+      if (d === day) seq = Math.max(seq, Number(r.seq) || 0);
+    });
+    seq++;
+    const id = Utilities.formatDate(now, TZ, 'ddMMyyyy') + '-' + seq;
+    const rec = { pallet_id: id, pallet_date: day, seq: seq, created_at: now, created_by: by, device: clean_(p.device, 60),
+                  scrap_type: clean_(p.scrap_type, 60), source: clean_(p.source, 80), weight_kg: weight, note: clean_(p.note, 300),
+                  status: 'open', client_id: clientId };
+    sh.getRange(sh.getLastRow() + 1, 1, 1, SCRAP_HEADERS.length).setValues([SCRAP_HEADERS.map(function (h) { return rec[h] === undefined ? '' : rec[h]; })]);
+    scrapLog_([{ pallet_id: id, event: 'create', by: by, at: now, to: weight === '' ? '' : weight + ' kg',
+                 note: [rec.scrap_type, rec.source, rec.device ? 'เครื่อง ' + rec.device : ''].filter(String).join(' · ') }]);
+    return scrapToClient_(rec);
+  });
+}
+
+/** filter: { dateFrom, dateTo (yyyy-MM-dd ตามวันที่ของพาเลท), status, type, q, includeDeleted, limit, export } */
+function scrapList(filter) {
+  filter = filter || {};
+  const limit = Math.min(Number(filter.limit) || 300, filter.export ? 20000 : 2000);
+  let from = clean_(filter.dateFrom, 10), to = clean_(filter.dateTo, 10);
+  if (from && to && from > to) { const t = from; from = to; to = t; }
+  const status = clean_(filter.status, 20), type = clean_(filter.type, 60), q = clean_(filter.q, 80).toLowerCase();
+  const sh = book_().getSheetByName(SCRAP_SHEET);
+  const rows = sh ? scrapRead_(sh).map(scrapToClient_) : [];
+  const photos = photosByScan_();
+  const urls = filter.export ? scrapPhotoUrls_() : null;
+  const out = [], byType = {}, byStatus = { open: 0, closed: 0, shipped: 0 }, types = {}, sources = {};
+  let total = 0, totalKg = 0, noWeight = 0;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i];
+    if (r.scrap_type) types[r.scrap_type] = 1;
+    if (r.source && Object.keys(sources).length < 200) sources[r.source] = 1;
+    if (r.status === 'deleted' && !filter.includeDeleted) continue;
+    if (from && r.pallet_date < from) continue;
+    if (to && r.pallet_date > to) continue;
+    if (status && r.status !== status) continue;
+    if (type && r.scrap_type !== type) continue;
+    if (q && [r.pallet_id, r.scrap_type, r.source, r.note, r.created_by, r.ship_ref].join(' ').toLowerCase().indexOf(q) < 0) continue;
+    if (r.status !== 'deleted') {
+      total++;
+      byStatus[r.status] = (byStatus[r.status] || 0) + 1;
+      const t = byType[r.scrap_type || '-'] || (byType[r.scrap_type || '-'] = { n: 0, kg: 0 });
+      t.n++;
+      if (r.weight_kg === '') noWeight++; else { t.kg += r.weight_kg; totalKg += r.weight_kg; }
+    }
+    if (out.length < limit) {
+      r.photos = photos[r.pallet_id] || [];
+      if (urls) r.photo_urls = urls[r.pallet_id] || [];
+      out.push(r);
+    }
+  }
+  Object.keys(byType).forEach(function (k) { byType[k].kg = Math.round(byType[k].kg * 1000) / 1000; });
+  return { rows: out, total: total, totalKg: Math.round(totalKg * 1000) / 1000, noWeight: noWeight, byType: byType, byStatus: byStatus,
+           types: Object.keys(types).sort(), sources: Object.keys(sources) };
+}
+
+function scrapPhotoUrls_() {
+  const sh = book_().getSheetByName(PHOTO_SHEET);
+  const map = {};
+  if (!sh) return map;
+  readPhotos_(sh).forEach(function (p) {
+    if (String(p.status) === 'deleted' || String(p.location) !== 'SCRAP') return;
+    (map[String(p.scan_id)] = map[String(p.scan_id)] || []).push(String(p.file_url));
+  });
+  return map;
+}
+
+function scrapGet(id) {
+  const row = scrapFind_(id);
+  if (!row) throw new Error('ไม่พบพาเลท ' + clean_(id, 40));
+  const r = scrapToClient_(row);
+  r.photos = photosByScan_()[r.pallet_id] || [];
+  return r;
+}
+
+/** แก้ข้อมูล ch: { weight_kg, scrap_type, source, note } — แก้น้ำหนักหลังบันทึกแล้วต้องมีเหตุผล ระบบเก็บน้ำหนักแรกไว้ใน weight_original */
+function scrapUpdate(id, ch, by, reason) {
+  ch = ch || {};
+  by = clean_(by, 60); reason = clean_(reason, 200);
+  if (!by) throw new Error('กรุณาระบุชื่อผู้แก้ไข');
+  return scrapLocked_(function (sh) {
+    const row = scrapRow_(sh, id);
+    if (String(row.status) === 'deleted') throw new Error('พาเลทนี้ถูกลบแล้ว');
+    const now = new Date(), logs = [];
+    const set = function (field, v, label) {
+      const old = row[field] === undefined || row[field] === null ? '' : row[field];
+      if (String(old) === String(v)) return;
+      row[field] = v;
+      logs.push({ pallet_id: String(row.pallet_id), event: field === 'weight_kg' ? 'weight' : 'edit', by: by, at: now, field: label,
+                  from: old === '' ? '' : String(old) + (field === 'weight_kg' ? ' kg' : ''), to: v === '' ? '' : String(v) + (field === 'weight_kg' ? ' kg' : ''), note: reason });
+    };
+    if ('weight_kg' in ch) {
+      const w = scrapWeight_(ch.weight_kg);
+      if (row.weight_kg !== '' && String(row.weight_kg) !== String(w)) {
+        if (!reason) throw new Error('กรุณาเลือกเหตุผลที่แก้น้ำหนัก');
+        if (row.weight_original === '' || row.weight_original == null) row.weight_original = row.weight_kg;
+      }
+      set('weight_kg', w, 'น้ำหนัก');
+    }
+    if ('scrap_type' in ch) set('scrap_type', clean_(ch.scrap_type, 60), 'ประเภท');
+    if ('source' in ch) set('source', clean_(ch.source, 80), 'ที่มา');
+    if ('note' in ch) set('note', clean_(ch.note, 300), 'หมายเหตุ');
+    if (logs.length) {
+      row.updated_by = by; row.updated_at = now;
+      scrapWrite_(sh, row);
+      scrapLog_(logs);
+    }
+    return scrapToClient_(row);
+  });
+}
+
+/** เปลี่ยนสถานะ: open / closed (ต้องมีน้ำหนัก) / shipped (ใส่เลขที่เอกสารหรือผู้รับซื้อได้) */
+function scrapSetStatus(id, status, by, opt) {
+  opt = opt || {};
+  by = clean_(by, 60); status = clean_(status, 20);
+  if (!by) throw new Error('กรุณาระบุชื่อ');
+  if (!SCRAP_STATUS[status]) throw new Error('สถานะไม่ถูกต้อง');
+  return scrapLocked_(function (sh) {
+    const row = scrapRow_(sh, id);
+    if (String(row.status) === 'deleted') throw new Error('พาเลทนี้ถูกลบแล้ว');
+    if (status !== 'open' && (row.weight_kg === '' || row.weight_kg == null)) throw new Error('ต้องใส่น้ำหนักก่อนปิดพาเลท');
+    const old = String(row.status || 'open'), now = new Date();
+    if (old === status) return scrapToClient_(row);
+    row.status = status;
+    if (status === 'closed' && !row.closed_at) { row.closed_by = by; row.closed_at = now; }
+    if (status === 'shipped') {
+      if (!row.closed_at) { row.closed_by = by; row.closed_at = now; }
+      row.shipped_by = by; row.shipped_at = now; row.ship_ref = clean_(opt.ship_ref, 120);
+    }
+    if (status === 'open') { row.closed_by = ''; row.closed_at = ''; row.shipped_by = ''; row.shipped_at = ''; row.ship_ref = ''; }
+    row.updated_by = by; row.updated_at = now;
+    scrapWrite_(sh, row);
+    scrapLog_([{ pallet_id: String(row.pallet_id), event: 'status', by: by, at: now, field: 'สถานะ', from: old, to: status,
+                 note: [clean_(opt.ship_ref, 120), clean_(opt.note, 200)].filter(String).join(' · ') }]);
+    return scrapToClient_(row);
+  });
+}
+
+function scrapDelete(id, by, reason) {
+  by = clean_(by, 60); reason = clean_(reason, 200);
+  if (!by) throw new Error('กรุณาระบุชื่อผู้ลบ');
+  if (!reason) throw new Error('กรุณาเลือกเหตุผล');
+  return scrapLocked_(function (sh) {
+    const row = scrapRow_(sh, id);
+    if (String(row.status) !== 'deleted') {
+      const now = new Date(), old = String(row.status);
+      row.status = 'deleted'; row.deleted_by = by; row.deleted_at = now; row.delete_reason = reason;
+      scrapWrite_(sh, row);
+      scrapLog_([{ pallet_id: String(row.pallet_id), event: 'delete', by: by, at: now, from: old, note: reason }]);
+    }
+    return scrapToClient_(row);
+  });
+}
+
+function scrapTimeline(id) {
+  const rec = scrapGet(id);
+  const sh = book_().getSheetByName(SCRAP_LOG_SHEET);
+  const events = [];
+  if (sh && sh.getLastRow() > 1) {
+    sh.getRange(2, 1, sh.getLastRow() - 1, SCRAP_LOG_HEADERS.length).getValues().forEach(function (r) {
+      if (String(r[1]) !== rec.pallet_id) return;
+      const o = {};
+      SCRAP_LOG_HEADERS.forEach(function (h, j) { o[h] = h === 'at' ? fmt_(r[j]) : String(r[j] == null ? '' : r[j]); });
+      events.push(o);
+    });
+  }
+  events.sort(function (a, b) { return a.at < b.at ? -1 : a.at > b.at ? 1 : 0; });
+  return { record: rec, events: events };
 }

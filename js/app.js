@@ -1,12 +1,12 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261120-1350'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261121-0724'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
 var S = {
-  view: ['scan', 'manual', 'count', 'map', 'kd', 'history'].indexOf(store('pda_view')) >= 0 ? store('pda_view') : 'scan', // เปิดแอป / รีเฟรช → อยู่หน้าเดิม
+  view: ['scan', 'manual', 'count', 'map', 'kd', 'scrap', 'history'].indexOf(store('pda_view')) >= 0 ? store('pda_view') : 'scan', // เปิดแอป / รีเฟรช → อยู่หน้าเดิม
   user: validName(store('pda_user')) ? store('pda_user') : '', // ชื่อ "0" ฯลฯ ที่ตั้งไว้กันแอบอ้าง = ถือว่ายังไม่มีชื่อ
   device: store('pda_device') || '',
   location: store('pda_loc') || '',
@@ -136,15 +136,16 @@ function render() {
       '<button data-view="count" class="' + (S.view === 'count' ? 'active' : '') + '">นับรูป</button>' +
       '<button data-view="map" class="' + (S.view === 'map' ? 'active' : '') + '">ผัง</button>' +
       '<button data-view="kd" class="' + (S.view === 'kd' ? 'active' : '') + '">Kingdee</button>' +
+      '<button data-view="scrap" class="' + (S.view === 'scrap' ? 'active' : '') + '">Scrap</button>' +
       '<button data-view="history" class="' + (S.view === 'history' ? 'active' : '') + '">ประวัติ / ลบ</button>' +
     '</nav>' +
     '<main id="main" class="view-' + (S.view === 'kd' ? 'map view-kd' : S.view) + '"></main>';
   $('btnUser').onclick = openUserModal;
   $('btnSettings').onclick = openSettings;
   Array.prototype.forEach.call(document.querySelectorAll('.tabs button'), function (b) {
-    b.onclick = function () { S.view = b.getAttribute('data-view'); render(); if (S.view !== 'history' && S.view !== 'count' && !isMapView()) syncRecent(); };
+    b.onclick = function () { S.view = b.getAttribute('data-view'); render(); if (S.view !== 'history' && S.view !== 'count' && S.view !== 'scrap' && !isMapView()) syncRecent(); };
   });
-  if (S.view === 'scan') renderScan(); else if (S.view === 'manual') renderManual(); else if (S.view === 'count') renderCount(); else if (isMapView()) renderMap(); else renderHistory();
+  if (S.view === 'scan') renderScan(); else if (S.view === 'manual') renderManual(); else if (S.view === 'count') renderCount(); else if (isMapView()) renderMap(); else if (S.view === 'scrap') renderScrap(); else renderHistory();
 }
 
 function refreshHeader() {
@@ -3050,7 +3051,7 @@ function addPhoto(scanId, file, row) {
 }
 
 function afterPhotoChange(scanId, row) {
-  if (S.view === 'scan' || S.view === 'manual') { renderSync(); renderRecent(); } else { renderHistoryList(); refreshHeader(); }
+  if (S.view === 'scan' || S.view === 'manual') { renderSync(); renderRecent(); } else if (S.view === 'scrap') { renderScrapList(); refreshHeader(); } else { renderHistoryList(); refreshHeader(); }
   if (openPhotos.current && openPhotos.current.scanId === scanId) openPhotos(scanId, row || openPhotos.current.row);
 }
 
