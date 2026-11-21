@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261121-0745'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261121-0748'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -120,8 +120,8 @@ function beep(ok) {
 function setMsg(type, text, camFor) { S.msg = { type: type, text: text, at: Date.now(), camFor: camFor || '' }; renderMsg(); }
 
 // ======================= Layout =======================
-var VIEWS = [['scan', '📷', 'สแกน'], ['manual', '⌨️', 'กรอกเอง'], ['count', '🔢', 'นับรูป'], ['map', '🗺', 'ผัง'], ['kd', '📊', 'Kingdee'],
-  ['scrap', '♻️', 'Scrap'], ['history', '🕘', 'ประวัติ / ลบ']];
+var VIEWS = [['scan', '📷', 'สแกน'], ['manual', '⌨️', 'กรอกเอง'], ['map', '🗺', 'ผัง'], ['kd', '📊', 'Kingdee'],
+  ['history', '🕘', 'ประวัติ / ลบ'], ['count', '🔢', 'นับรูป'], ['scrap', '♻️', 'Scrap']];
 function viewInfo(v) { return VIEWS.filter(function (x) { return x[0] === v; })[0] || VIEWS[0]; }
 function pendingCount() { return S.recent.filter(function (r) { return r.status === 'pending'; }).length; }
 
