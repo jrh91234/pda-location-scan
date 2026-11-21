@@ -610,3 +610,24 @@ main.view-kd > .map-top, .map-top.tall { position: static; }
 .kdx-why { color: #b54708; }
 .kdx-flag { color: #b54708; }
 .kdx-sep { width: 8px; }
+
+/* ======================= Scrap ======================= */
+.tabs button { min-width: 0; }
+.scrap-top { display: grid; gap: 8px; }
+.scrap-top .save-btn { width: 100%; font-size: 18px; padding: 14px; }
+.scrap-top .scan-box .field { flex: 1; min-width: 0; }
+.pallet-id { font-size: 18px; letter-spacing: .5px; }
+.scrap-row .row-main { cursor: pointer; }
+.tag.shipped { background: var(--blue-soft); color: var(--blue); }
+.warn-num { color: var(--amber) !important; }
+.scrap-types { background: var(--card); border-radius: 10px; padding: 8px 10px; margin-bottom: 10px; }
+.st-row { display: grid; grid-template-columns: minmax(70px, 30%) 1fr auto; gap: 8px; align-items: center; font-size: 14px; padding: 3px 0; }
+.st-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.st-bar { background: var(--bg); border-radius: 4px; height: 10px; overflow: hidden; }
+.st-bar i { display: block; height: 100%; background: var(--blue); border-radius: 4px; }
+.st-val { color: var(--muted); font-size: 13px; white-space: nowrap; }
+.pallet-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 10px; }
+.pallet-big { font-size: 30px; font-weight: 700; color: var(--blue); letter-spacing: 1px; line-height: 1.2; overflow-wrap: anywhere; }
+.pallet-qr { width: 96px; flex: none; }
+.pallet-qr svg { width: 100%; height: auto; display: block; }
+.type-seg button { flex: 1 1 auto; }
