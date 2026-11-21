@@ -156,7 +156,8 @@ function renderScrapList() {
             (del ? '<div class="row-sub muted small">ลบโดย ' + esc(r.deleted_by) + ' · ' + esc(r.deleted_at) + ' · ' + esc(r.delete_reason) + '</div>' : '') +
           '</div>' +
           (del ? '' : '<div class="row-actions"><button class="btn small" data-cam="' + esc(r.pallet_id) + '" aria-label="ถ่ายรูป">📷</button>' +
-            '<button class="btn small" data-scw="' + esc(r.pallet_id) + '">⚖</button></div>') +
+            '<button class="btn small" data-scw="' + esc(r.pallet_id) + '" aria-label="น้ำหนัก">kg</button>' +
+            '<button class="btn small danger" data-scdel="' + esc(r.pallet_id) + '" aria-label="ลบ">ลบ</button></div>') +
         '</div>';
       }).join(''));
   bindPhotoButtons(el, scrapRowOf);
@@ -165,6 +166,9 @@ function renderScrapList() {
   });
   Array.prototype.forEach.call(el.querySelectorAll('[data-scw]'), function (b) {
     b.onclick = function () { editScrapWeight(scrapRowOf(b.getAttribute('data-scw'))); };
+  });
+  Array.prototype.forEach.call(el.querySelectorAll('[data-scdel]'), function (b) {
+    b.onclick = function () { deleteScrapUi(scrapRowOf(b.getAttribute('data-scdel')), true); };
   });
 }
 
@@ -184,7 +188,7 @@ function scrapTypeSeg(cur) {
 }
 function bindTypeSeg() {
   Array.prototype.forEach.call(document.querySelectorAll('[data-sctype]'), function (b) {
-    b.onclick = function () { Array.prototype.forEach.call(document.querySelectorAll('[data-sctype]'), function (x) { x.classList.toggle('active', x === b && !x.classList.contains('active')); }); };
+    b.onclick = function () { Array.prototype.forEach.call(document.querySelectorAll('[data-sctype]'), function (x) { x.classList.toggle('active', x === b); }); };
   });
 }
 function readTypeSeg() { var b = document.querySelector('[data-sctype].active'); return b ? b.getAttribute('data-sctype') : ''; }
@@ -248,7 +252,7 @@ function openScrapDetail(idOrRow, isNew) {
       '<div class="actions wrap">' +
         '<button class="btn primary" id="sdCam">📷 ถ่ายรูป</button>' +
         '<button class="btn" id="sdPhotos">🖼 รูป (' + ids.length + ')</button>' +
-        '<button class="btn" id="sdWeight">⚖ ' + (r.weight_kg === '' ? 'ใส่น้ำหนัก' : 'แก้น้ำหนัก') + '</button>' +
+        '<button class="btn" id="sdWeight">' + (r.weight_kg === '' ? 'ใส่น้ำหนัก' : 'แก้น้ำหนัก') + '</button>' +
         '<button class="btn" id="sdEdit">✏️ แก้ข้อมูล</button>' +
       '</div>' +
       '<div class="actions wrap">' +
@@ -369,14 +373,15 @@ function openScrapShip(r) {
   $('mOk').onclick = function () { this.disabled = true; scrapSetStatusUi(r, 'shipped', { ship_ref: $('shRef').value.trim() }); };
 }
 
-function deleteScrapUi(r) {
+function deleteScrapUi(r, fromList) {
   if (!S.user) { openUserModal(); return; }
   openModal('<h3>ลบพาเลท ' + esc(r.pallet_id) + '?</h3>' +
-    '<p class="muted small">ข้อมูลยังเก็บในชีต (สถานะ ลบแล้ว) และเลขพาเลทนี้จะไม่ถูกนำกลับมาใช้</p>' +
+    '<div class="card-lite small">' + esc(r.scrap_type || '-') + ' · ' + esc(scrapFmtKg(r.weight_kg) || 'ยังไม่ชั่ง') + ' · 👤 ' + esc(r.created_by) + '</div>' +
+    '<p class="muted small">ข้อมูลยังเก็บในชีต (สถานะ ลบแล้ว) ดูได้โดยติ๊ก "แสดงที่ลบแล้ว" · <b>เลข ' + esc(r.pallet_id) + ' จะไม่ถูกนำกลับมาใช้</b> พาเลทถัดไปของวันนี้จะได้เลขต่อจากเลขล่าสุดเสมอ (เช่น มี -1 ถึง -4 ลบ -2 → ใบถัดไปคือ -5) กันป้ายที่พิมพ์ไปแล้วซ้ำกับพาเลทใหม่</p>' +
     SCRAP_DELETE_REASONS.map(function (x, i) { return '<label class="radio"><input type="radio" name="sdWhy" value="' + esc(x) + '"' + (i === 0 ? ' checked' : '') + '> ' + esc(x) + '</label>'; }).join('') +
     '<input id="sdNote" class="field" placeholder="รายละเอียด (ถ้ามี)">' +
     '<div class="actions"><button class="btn" id="mCancel">ยกเลิก</button><button class="btn danger" id="mOk">ลบ</button></div>');
-  $('mCancel').onclick = function () { openScrapDetail(r); };
+  $('mCancel').onclick = function () { if (fromList) closeModal(); else openScrapDetail(r); };
   $('mOk').onclick = function () {
     var c = document.querySelector('input[name="sdWhy"]:checked');
     var why = [c ? c.value : '', $('sdNote').value.trim()].filter(String).join(': ');
