@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261126-0126'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261126-0132'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -3454,10 +3454,12 @@ function kdStaleHtml(short) {
       '<br><span class="small">ไฟล์ต้นทางยังส่งมาทุก 10 นาที แต่ตัวเลขเหมือนเดิมทุกรอบ — ตัวดึงข้อมูล Kingdee ของทีมอาจหยุดทำงาน ยอดที่เห็นอาจไม่ใช่ยอดล่าสุด</span></div>';
 }
 // สรุปพื้นที่: Location ทั้งหมด (จากไฟล์ Location ของ Kingdee) · ใช้แล้ว = มีของใน Kingdee หรือมีกล่องที่สแกนในแอป · ว่าง = ไม่มีทั้งสองระบบ
-var KDCAP = { open: store('pda_kdcap_open') === '1' };
+// ไม่นับ Public area (ไม่ใช่ช่องชั้นวาง) · เลือกได้ว่าจะรวมโซน CO / CP / CQ หรือไม่ (จำไว้ในเครื่อง)
+var KDCAP = { open: store('pda_kdcap_open') === '1', cpq: store('pda_kdcap_cpq') !== '0' };
+var KDCAP_ZONES = ['CO', 'CP', 'CQ'];
 function renderKdCap() {
   var el = $('kdCap'); if (!el) return;
-  var all = window.LOCATIONS || [], set = {}, kUse = {}, aUse = {};
+  var all = (window.LOCATIONS || []).filter(function (c) { return KDCAP.cpq || KDCAP_ZONES.indexOf(String(c).split('-')[0]) < 0; }), set = {}, kUse = {}, aUse = {};
   all.forEach(function (c) { set[c] = 1; });
   KD.rows.forEach(function (r) { if (set[r[0]]) kUse[r[0]] = 1; });
   var appReady = !!(MAP.loadedAt || MAP.items.length);
@@ -3475,11 +3477,13 @@ function renderKdCap() {
   var kReady = KD.rows.length > 0;
   el.innerHTML = '<div class="kd-cap">' +
     '<div class="kd-cap-h">📦 พื้นที่ Location <span class="muted small">' + (kReady ? '' : 'รอยอด Kingdee… ') + (appReady ? '' : 'รอข้อมูลสแกน…') + '</span></div>' +
+    '<div class="seg kd-cap-seg"><button type="button" data-kdcpq="1" class="' + (KDCAP.cpq ? 'active' : '') + '">รวม CO CP CQ</button>' +
+      '<button type="button" data-kdcpq="0" class="' + (KDCAP.cpq ? '' : 'active') + '">ไม่รวม CO CP CQ</button></div>' +
     '<div class="stats kd-cap-stats"><div><b>' + fmt(tot.n) + '</b><span>ทั้งหมด</span></div>' +
       '<div><b class="kd-cap-used">' + fmt(tot.used) + '</b><span>ใช้แล้ว (' + pct(tot.used, tot.n) + '%)</span></div>' +
       '<div><b class="kd-cap-free">' + fmt(tot.n - tot.used) + '</b><span>ว่าง (' + pct(tot.n - tot.used, tot.n) + '%)</span></div></div>' +
     '<div class="kd-cap-bar" title="ใช้แล้ว ' + pct(tot.used, tot.n) + '%"><i style="width:' + pct(tot.used, tot.n) + '%"></i></div>' +
-    '<div class="small muted">ใช้แล้ว = มีของใน Kingdee หรือมีกล่องที่สแกนในแอป · Kingdee มีของ ' + fmt(tot.k) + ' ช่อง · แอปสแกนแล้ว ' + fmt(tot.a) + ' ช่อง</div>' +
+    '<div class="small muted">ใช้แล้ว = มีของใน Kingdee หรือมีกล่องที่สแกนในแอป · ไม่นับ Public area' + (KDCAP.cpq ? '' : ' · ไม่รวมโซน CO CP CQ') + ' · Kingdee มีของ ' + fmt(tot.k) + ' ช่อง · แอปสแกนแล้ว ' + fmt(tot.a) + ' ช่อง</div>' +
     '<details id="kdCapZ"' + (KDCAP.open ? ' open' : '') + '><summary class="small">แยกตามโซน</summary><table class="kd-cap-t"><thead><tr><th>โซน</th><th>ทั้งหมด</th><th>ใช้แล้ว</th><th>ว่าง</th><th>Kingdee</th><th>แอป</th><th></th></tr></thead><tbody>' +
       Object.keys(zones).sort().map(function (z) {
         var o = zones[z], p = pct(o.used, o.n);
@@ -3487,6 +3491,9 @@ function renderKdCap() {
           '<td class="kd-cap-pc"><span class="kd-cap-mini"><i style="width:' + p + '%"></i></span>' + p + '%</td></tr>';
       }).join('') + '</tbody></table></details></div>';
   $('kdCapZ').addEventListener('toggle', function () { KDCAP.open = this.open; store('pda_kdcap_open', this.open ? '1' : '0'); });
+  Array.prototype.forEach.call(el.querySelectorAll('[data-kdcpq]'), function (b) {
+    b.onclick = function () { KDCAP.cpq = b.getAttribute('data-kdcpq') === '1'; store('pda_kdcap_cpq', KDCAP.cpq ? '1' : '0'); renderKdCap(); };
+  });
 }
 function renderKdSnap() {
   var el = $('kdSnap'); if (!el) return;

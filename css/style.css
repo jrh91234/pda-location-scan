@@ -680,3 +680,4 @@ main.view-kd > .map-top, .map-top.tall { position: static; }
 .kd-cap-t th:first-child, .kd-cap-t td:first-child { text-align: left; }
 .kd-cap-pc { white-space: nowrap; }
 .kd-cap-mini { display: inline-block; width: 40px; height: 6px; background: var(--green-soft); border-radius: 3px; overflow: hidden; margin-right: 4px; vertical-align: middle; }
+.kd-cap-seg { margin: 4px 0 8px; } .kd-cap-seg button { flex: 1; }
