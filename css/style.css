@@ -665,3 +665,18 @@ main.view-kd > .map-top, .map-top.tall { position: static; }
 .sm-sum { margin: 8px 2px; }
 .row.st-shipped { border-left-color: var(--blue); }
 .sm-item.sm-off { opacity: .55; }
+/* Kingdee: สรุปพื้นที่ Location */
+.kd-cap { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin: 8px 0; }
+.kd-cap-h { font-weight: 700; margin-bottom: 6px; }
+.kd-cap-stats { margin-bottom: 6px; }
+.kd-cap-stats div { background: var(--bg); }
+.kd-cap-used { color: var(--amber) !important; }
+.kd-cap-free { color: var(--green) !important; font-weight: 700; }
+.kd-cap-bar { height: 10px; background: var(--green-soft); border-radius: 5px; overflow: hidden; margin-bottom: 4px; }
+.kd-cap-bar i, .kd-cap-mini i { display: block; height: 100%; background: var(--amber); }
+.kd-cap details { margin-top: 6px; }
+.kd-cap-t { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 4px; }
+.kd-cap-t th, .kd-cap-t td { padding: 3px 4px; text-align: right; border-bottom: 1px solid var(--line); }
+.kd-cap-t th:first-child, .kd-cap-t td:first-child { text-align: left; }
+.kd-cap-pc { white-space: nowrap; }
+.kd-cap-mini { display: inline-block; width: 40px; height: 6px; background: var(--green-soft); border-radius: 3px; overflow: hidden; margin-right: 4px; vertical-align: middle; }
