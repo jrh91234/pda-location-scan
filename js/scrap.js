@@ -470,6 +470,32 @@ function openScrapTimeline(r) {
 }
 
 // ---------- Export Excel ----------
+// หัวตาราง 3 ภาษา: ไทย / English / 中文
+var SCRAP_XH = {
+  'เลขพาเลท': ['Pallet No.', '托盘号'], 'วันที่พาเลท': ['Pallet Date', '托盘日期'], 'ลำดับ': ['Seq.', '序号'], 'แผนก': ['Department', '部门'],
+  'ประเภท': ['Scrap Type', '废料类型'], 'ที่มา': ['Source', '来源'], 'น้ำหนัก (kg)': ['Weight (kg)', '重量 (kg)'], 'น้ำหนักเดิม (kg)': ['Original Weight (kg)', '原重量 (kg)'],
+  'สถานะ': ['Status', '状态'], 'หมายเหตุ': ['Remark', '备注'], 'ผู้สร้าง': ['Created By', '创建人'], 'สร้างเมื่อ': ['Created At', '创建时间'], 'เครื่อง': ['Device', '设备'],
+  'ขายโดย': ['Sold By', '出售人'], 'ขายเมื่อ': ['Sold At', '出售时间'], 'เอกสาร/ผู้รับซื้อ': ['Doc No. & Buyer', '单据号及买方'], 'ชุดใบส่งของ': ['Delivery Batch', '送货批次'],
+  'แก้ไขล่าสุดโดย': ['Last Edited By', '最后修改人'], 'แก้ไขล่าสุดเมื่อ': ['Last Edited At', '最后修改时间'], 'ลบโดย': ['Deleted By', '删除人'], 'ลบเมื่อ': ['Deleted At', '删除时间'],
+  'เหตุผลลบ': ['Delete Reason', '删除原因'], 'จำนวนรูป': ['Photos', '照片数'], 'ลิงก์รูป (Google Drive)': ['Photo Links (Google Drive)', '照片链接 (Google Drive)'],
+  'จำนวนพาเลท': ['Pallets', '托盘数'], 'น้ำหนักรวม (kg)': ['Total Weight (kg)', '总重量 (kg)'], 'ยังไม่ชั่ง': ['Not Weighed', '未称重'],
+  'Stock (พาเลท)': ['Stock (pallets)', '库存 (托盘)'], 'Stock (kg)': ['Stock (kg)', '库存 (kg)'], 'ขายแล้ว (พาเลท)': ['Sold (pallets)', '已售 (托盘)'],
+  'ขายแล้ว (kg)': ['Sold (kg)', '已售 (kg)'], 'วันที่': ['Date', '日期']
+};
+var SCRAP_XH_TH = { 'Stock (พาเลท)': 'สต็อก (พาเลท)', 'Stock (kg)': 'สต็อก (kg)' };
+// เปลี่ยนหัวคอลัมน์ (แถว 1) เป็น 3 ภาษา และขยายความกว้างคอลัมน์ให้พอดีหัว
+function scrapTriHeader(ws) {
+  var rg = XLSX.utils.decode_range(ws['!ref']), cols = ws['!cols'] || [];
+  for (var c = rg.s.c; c <= rg.e.c; c++) {
+    var cell = ws[XLSX.utils.encode_cell({ r: 0, c: c })]; if (!cell) continue;
+    var t = SCRAP_XH[cell.v];
+    if (t) { cell.v = [SCRAP_XH_TH[cell.v] || cell.v, t[0], t[1]].join(' / '); cell.w = cell.v; }
+    var w = String(cell.v).length + 2;
+    cols[c] = { wch: Math.max((cols[c] && cols[c].wch) || 0, Math.min(w, 60)) };
+  }
+  ws['!cols'] = cols;
+  return ws;
+}
 function exportScrapExcel() {
   var f = readScrapFilter(), btn = $('scXlsx');
   btn.disabled = true; btn.textContent = 'กำลังเตรียม…';
@@ -489,7 +515,7 @@ function exportScrapExcel() {
     var ws = XLSX.utils.json_to_sheet(rows);
     ws['!cols'] = [13, 11, 6, 18, 16, 18, 11, 11, 11, 24, 14, 19, 10, 14, 19, 18, 26, 14, 19, 12, 19, 16, 8, 60].map(function (w) { return { wch: w }; });
     ws['!autofilter'] = { ref: ws['!ref'] };
-    XLSX.utils.book_append_sheet(wb, ws, 'พาเลท');
+    XLSX.utils.book_append_sheet(wb, scrapTriHeader(ws), 'พาเลท · Pallets · 托盘');
 
     var live = d.rows.filter(function (r) { return r.status !== 'deleted'; });
     var byType = {}, byDay = {}, byDept = {};
@@ -508,19 +534,19 @@ function exportScrapExcel() {
       var t = byType[k];
       return { 'ประเภท': k, 'จำนวนพาเลท': t.n, 'น้ำหนักรวม (kg)': r3(t.kg), 'ยังไม่ชั่ง': t.nw, 'Stock (พาเลท)': t.stock || 0, 'Stock (kg)': r3(t.stockKg || 0), 'ขายแล้ว (พาเลท)': t.shipped || 0, 'ขายแล้ว (kg)': r3(t.shippedKg || 0) };
     });
-    trows.push({ 'ประเภท': 'รวม', 'จำนวนพาเลท': live.length, 'น้ำหนักรวม (kg)': r3(live.reduce(function (s, r) { return s + (r.weight_kg || 0); }, 0)),
+    trows.push({ 'ประเภท': 'รวม / Total / 合计', 'จำนวนพาเลท': live.length, 'น้ำหนักรวม (kg)': r3(live.reduce(function (s, r) { return s + (r.weight_kg || 0); }, 0)),
       'ยังไม่ชั่ง': live.filter(function (r) { return r.weight_kg === ''; }).length });
     var ws2 = XLSX.utils.json_to_sheet(trows);
     ws2['!cols'] = [18, 12, 15, 10, 13, 11, 15, 13].map(function (w) { return { wch: w }; });
-    XLSX.utils.book_append_sheet(wb, ws2, 'สรุปตามประเภท');
+    XLSX.utils.book_append_sheet(wb, scrapTriHeader(ws2), 'ประเภท · By Type · 按类型');
     var prow = Object.keys(byDept).sort().map(function (k) { var x = byDept[k]; return { 'แผนก': k, 'จำนวนพาเลท': x.n, 'น้ำหนักรวม (kg)': r3(x.kg), 'Stock (kg)': r3(x.stock), 'ขายแล้ว (kg)': r3(x.sold) }; });
     var wsD = XLSX.utils.json_to_sheet(prow);
     wsD['!cols'] = [24, 12, 15, 13, 14].map(function (w) { return { wch: w }; });
-    XLSX.utils.book_append_sheet(wb, wsD, 'สรุปตามแผนก');
+    XLSX.utils.book_append_sheet(wb, scrapTriHeader(wsD), 'แผนก · By Dept · 按部门');
     var drows = Object.keys(byDay).sort().map(function (k) { var x = byDay[k]; return { 'วันที่': scrapDay(x.day), 'ประเภท': x.type, 'จำนวนพาเลท': x.n, 'น้ำหนักรวม (kg)': r3(x.kg) }; });
     var ws3 = XLSX.utils.json_to_sheet(drows.length ? drows : [{ 'วันที่': '(ไม่มีข้อมูล)' }]);
     ws3['!cols'] = [12, 18, 12, 15].map(function (w) { return { wch: w }; });
-    XLSX.utils.book_append_sheet(wb, ws3, 'สรุปรายวัน');
+    XLSX.utils.book_append_sheet(wb, scrapTriHeader(ws3), 'รายวัน · Daily · 每日');
     XLSX.writeFile(wb, 'Scrap_' + scrapRangeName(f) + '_' + scrapStamp() + '.xlsx');
     done();
     toast('ดาวน์โหลด ' + d.rows.length + ' พาเลท', 3000);
