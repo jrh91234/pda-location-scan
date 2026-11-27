@@ -46,6 +46,7 @@ function doGet() {
 function onOpen() {
   SpreadsheetApp.getUi().createMenu('PDA Scan')
     .addItem('ตั้งค่าเริ่มต้น (สร้างชีต Scans)', 'setupFromMenu')
+    .addItem('แชร์รูป Scrap ให้ทุกคนที่มีลิงก์ดูได้', 'shareScrapPhotosFromMenu')
     .addToUi();
 }
 
@@ -582,7 +583,9 @@ function uploadPhoto(p) {
     const now = new Date();
     const name = [loc || 'NOLOC', (part || 'item').replace(/[\/:*?"<>|]/g, '_').slice(0, 40),
                   Utilities.formatDate(now, TZ, 'yyyyMMdd-HHmmss'), id.slice(0, 6)].join('_') + (mime === 'image/png' ? '.png' : '.jpg');
-    const file = photoFolder_().createFile(Utilities.newBlob(bytes, mime, name));
+    // รูปพาเลท Scrap → โฟลเดอร์ "Scrap Photos" ที่แชร์ให้ทุกคนที่มีลิงก์ดูได้ (รูปสินค้าจากหน้าสแกนยังเป็นส่วนตัว)
+    const file = (pallet ? scrapPhotoFolder_() : photoFolder_()).createFile(Utilities.newBlob(bytes, mime, name));
+    if (pallet) scrapShareItem_(file);
     const rec = { photo_id: id, scan_id: scanId, location: loc, part_code: part, file_id: file.getId(), file_url: file.getUrl(),
                   uploaded_at: now, uploaded_by: by, status: 'active', deleted_by: '', deleted_at: '' };
     sh.getRange(sh.getLastRow() + 1, 1, 1, PHOTO_HEADERS.length).setValues([PHOTO_HEADERS.map(function (h) { return rec[h]; })]);
@@ -1229,6 +1232,7 @@ function scrapList(filter) {
   const sh = book_().getSheetByName(SCRAP_SHEET);
   const rows = sh ? scrapRead_(sh).map(scrapToClient_) : [];
   const photos = photosByScan_();
+  if (filter.export) scrapShareOldPhotos_(); // ครั้งแรก: ย้าย/แชร์รูป Scrap ที่อัปโหลดก่อนมีโฟลเดอร์แชร์
   const urls = filter.export ? scrapPhotoUrls_() : null;
   const out = [], byType = {}, byStatus = { stock: 0, shipped: 0 }, kgByStatus = { stock: 0, shipped: 0 }, types = {}, sources = {}, usedDepts = {};
   // Stock ในโรงงาน = ทุกพาเลทที่ยังไม่ขาย ทุกวันที่ ไม่ขึ้นกับตัวกรอง · ready = มีน้ำหนักแล้ว (ขายได้)
@@ -1472,4 +1476,49 @@ function scrapAddDepartment(name, by) {
   } finally {
     lock.releaseLock();
   }
+}
+
+// ---------- แชร์รูป Scrap ----------
+// ทุกคนที่มีลิงก์ดูได้ (ไม่ต้องขอสิทธิ์) — ถ้าองค์กรไม่อนุญาตแชร์นอกโดเมน จะแชร์ให้ทุกคนในโดเมนที่มีลิงก์แทน
+function scrapShareItem_(item) {
+  try { item.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); return 'anyone'; } catch (e) { /* นโยบายองค์กรไม่อนุญาต */ }
+  try { item.setSharing(DriveApp.Access.DOMAIN_WITH_LINK, DriveApp.Permission.VIEW); return 'domain'; } catch (e) { return ''; }
+}
+
+function scrapPhotoFolder_() {
+  const props = PropertiesService.getScriptProperties();
+  const id = props.getProperty('SCRAP_PHOTO_FOLDER_ID');
+  if (id) {
+    try { return DriveApp.getFolderById(id); } catch (e) { /* ถูกลบ → สร้างใหม่ */ }
+  }
+  const folder = photoFolder_().createFolder('Scrap Photos');
+  scrapShareItem_(folder);
+  props.setProperty('SCRAP_PHOTO_FOLDER_ID', folder.getId());
+  return folder;
+}
+
+/** ย้ายรูป Scrap เก่าเข้าโฟลเดอร์แชร์ + แชร์ทีละไฟล์ (ทำครั้งเดียว แล้วจำไว้ใน Script Property) */
+function scrapShareOldPhotos_(force) {
+  const props = PropertiesService.getScriptProperties();
+  if (!force && props.getProperty('SCRAP_PHOTOS_SHARED') === '1') return { skipped: true };
+  const sh = book_().getSheetByName(PHOTO_SHEET);
+  let done = 0, failed = 0;
+  if (sh) {
+    const folder = scrapPhotoFolder_();
+    readPhotos_(sh).forEach(function (p) {
+      if (String(p.location) !== 'SCRAP' || String(p.status) === 'deleted' || !p.file_id) return;
+      try {
+        const f = DriveApp.getFileById(String(p.file_id));
+        try { f.moveTo(folder); } catch (e) { /* ย้ายไม่ได้ก็แชร์ที่เดิม */ }
+        if (scrapShareItem_(f)) done++; else failed++;
+      } catch (e) { failed++; }
+    });
+  }
+  if (!failed) props.setProperty('SCRAP_PHOTOS_SHARED', '1');
+  return { shared: done, failed: failed };
+}
+
+function shareScrapPhotosFromMenu() {
+  const r = scrapShareOldPhotos_(true);
+  SpreadsheetApp.getUi().alert('แชร์รูป Scrap แล้ว ' + r.shared + ' รูป' + (r.failed ? ' · ไม่สำเร็จ ' + r.failed + ' รูป (ไฟล์ถูกลบหรือนโยบายองค์กรไม่อนุญาต)' : ''));
 }

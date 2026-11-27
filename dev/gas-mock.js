@@ -106,16 +106,21 @@
       getId: function () { return id; },
       getUrl: function () { return 'https://drive.google.com/file/d/' + id + '/view'; },
       setTrashed: function (t) { var f = files(); if (f[id]) { f[id].trashed = t; saveFiles(f); } },
+      setSharing: function (a, p) { var f = files(); if (f[id]) { f[id].sharing = a + ':' + p; saveFiles(f); } },
+      moveTo: function (folder) { var f = files(); if (f[id]) { f[id].folder = folder.getId(); saveFiles(f); } },
       getBlob: function () { var r = files()[id]; if (!r) throw new Error('mock: no file'); return { getContentType: function () { return r.mime; }, getBytes: function () { return { __b64: r.b64 }; } }; }
     };
   }
   function folderObj(fid) {
     return {
       getId: function () { return fid; }, getName: function () { return 'PDA Scan Photos'; },
-      createFile: function (blob) { var id = 'mockfile-' + Math.random().toString(36).slice(2, 10); var f = files(); f[id] = { mime: blob.mime, name: blob.name, b64: blob.bytes.__b64 }; saveFiles(f); return fileObj(id); }
+      createFile: function (blob) { var id = 'mockfile-' + Math.random().toString(36).slice(2, 10); var f = files(); f[id] = { mime: blob.mime, name: blob.name, b64: blob.bytes.__b64, folder: fid }; saveFiles(f); return fileObj(id); },
+      createFolder: function (name) { return folderObj('mock-folder-' + name.replace(/\s+/g, '-')); },
+      setSharing: function (a, p) { localStorage.setItem('gasmock_share_' + fid, a + ':' + p); }
     };
   }
   window.DriveApp = {
+    Access: { ANYONE_WITH_LINK: 'ANYONE_WITH_LINK', DOMAIN_WITH_LINK: 'DOMAIN_WITH_LINK' }, Permission: { VIEW: 'VIEW' },
     createFolder: function () { return folderObj('mock-folder'); },
     getFolderById: function (id) { return folderObj(id); },
     getRootFolder: function () { return folderObj('root'); },
