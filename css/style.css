@@ -681,3 +681,15 @@ main.view-kd > .map-top, .map-top.tall { position: static; }
 .kd-cap-pc { white-space: nowrap; }
 .kd-cap-mini { display: inline-block; width: 40px; height: 6px; background: var(--green-soft); border-radius: 3px; overflow: hidden; margin-right: 4px; vertical-align: middle; }
 .kd-cap-seg { margin: 4px 0 8px; } .kd-cap-seg button { flex: 1; }
+/* Kingdee: แถบตัวเลือกแบบพับ */
+.kd-bar { display: block; }
+.kd-snap { margin-bottom: 4px; }
+.kd-opts { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 0 10px; }
+.kd-opts > summary { cursor: pointer; padding: 8px 0; font-size: 14px; list-style: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kd-opts > summary::-webkit-details-marker { display: none; }
+.kd-opts > summary::after { content: '▾'; float: right; color: var(--muted); }
+.kd-opts[open] > summary::after { content: '▴'; }
+.kd-opt { display: flex; align-items: center; gap: 8px; padding: 0 0 8px; }
+.kd-opt > .small { width: 64px; flex: none; color: var(--muted); }
+.kd-opt .seg { margin: 0; flex: 1; flex-wrap: nowrap; }
+.kd-opt .seg button { flex: 1; padding: 6px 8px; font-size: 14px; white-space: nowrap; }

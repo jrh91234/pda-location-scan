@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261126-0132'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261127-0509'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -3406,13 +3406,16 @@ function kdCompute() {
 }
 
 function kdTopHtml() {
+  // ตัวเลือกการแสดงผลพับไว้ในบรรทัดเดียว (summary บอกค่าที่เลือกอยู่) — ไม่ให้หน้าจอรก
   return '<div class="kd-bar">' +
-      '<span class="small">เทียบระดับ</span><div class="seg"><button data-kdmode="lot" class="' + (KD.mode === 'lot' ? 'active' : '') + '">รหัส + Lot</button>' +
-      '<button data-kdmode="part" class="' + (KD.mode === 'part' ? 'active' : '') + '">รหัสอย่างเดียว</button></div>' +
-      '<span id="kdSnap" class="small muted"></span>' +
-      '<span class="small">สีช่อง</span><div class="seg"><button data-kdcolor="cmp" class="' + (KD.color === 'cmp' ? 'active' : '') + '">เทียบยอด</button>' +
-      '<button data-kdcolor="age" class="' + (KD.color === 'age' ? 'active' : '') + '">🕒 อายุในช่อง</button></div>' +
-      '<button class="btn small' + (KDM.trail ? ' active' : '') + '" id="kdTrail" title="ลูกศร 10 ความเคลื่อนไหว Kingdee ล่าสุด">➜ ความเคลื่อนไหว</button>' +
+      '<div id="kdSnap" class="small muted kd-snap"></div>' +
+      '<details class="kd-opts" id="kdOpts"' + (store('pda_kd_opts') === '1' ? ' open' : '') + '><summary>⚙ <span id="kdOptsSum">' + kdOptsSummary() + '</span></summary>' +
+        '<div class="kd-opt"><span class="small">เทียบระดับ</span><div class="seg"><button data-kdmode="lot" class="' + (KD.mode === 'lot' ? 'active' : '') + '">รหัส + Lot</button>' +
+          '<button data-kdmode="part" class="' + (KD.mode === 'part' ? 'active' : '') + '">รหัสอย่างเดียว</button></div></div>' +
+        '<div class="kd-opt"><span class="small">สีช่อง</span><div class="seg"><button data-kdcolor="cmp" class="' + (KD.color === 'cmp' ? 'active' : '') + '">เทียบยอด</button>' +
+          '<button data-kdcolor="age" class="' + (KD.color === 'age' ? 'active' : '') + '">🕒 อายุในช่อง</button></div></div>' +
+        '<div class="kd-opt"><span class="small">ลูกศร</span><div class="seg"><button class="' + (KDM.trail ? 'active' : '') + '" id="kdTrail" title="ลูกศร 10 ความเคลื่อนไหว Kingdee ล่าสุด">➜ ความเคลื่อนไหว ' + (KDM.trail ? 'เปิด' : 'ปิด') + '</button></div></div>' +
+      '</details>' +
     '</div>' +
     '<div id="kdCap"></div><div id="kdStale"></div><div id="kdRound" class="kd-round"></div><div id="kdPub"></div><div id="kdXfer"></div>' +
     '<div class="kdf-bar"><div class="ac-wrap kdf-wrap"><input id="kdfQ" class="field" autocomplete="off" spellcheck="false" enterkeyhint="search" placeholder="สแกน / พิมพ์ รหัส · Lot · ชื่อพาร์ท · Spec" value="' + esc(KDF.q) + '">' +
@@ -3427,7 +3430,11 @@ function kdTopHtml() {
     }).join('') + '<span><i class="lg kd-done-lg">✔</i>กดนับเสร็จแล้ว</span><span><i class="lg kd-moved-lg"></i>Kingdee เปลี่ยน (ช่วงที่เลือก)</span></div>') +
     '<div id="kdList"></div><div id="kdMoves"></div>';
 }
+function kdOptsSummary() {
+  return '<b>' + (KD.mode === 'lot' ? 'รหัส + Lot' : 'รหัสอย่างเดียว') + '</b> · <b>' + (KD.color === 'age' ? '🕒 อายุในช่อง' : 'เทียบยอด') + '</b>' + (KDM.trail ? ' · <b>➜ ความเคลื่อนไหว</b>' : '');
+}
 function bindKdTop() {
+  $('kdOpts').addEventListener('toggle', function () { store('pda_kd_opts', this.open ? '1' : '0'); });
   Array.prototype.forEach.call(document.querySelectorAll('[data-kdmode]'), function (b) {
     b.onclick = function () { KD.mode = b.getAttribute('data-kdmode'); store('pda_kd_mode', KD.mode); kdCompute.key = null; renderMap(); };
   });
@@ -3436,7 +3443,11 @@ function bindKdTop() {
   });
   loadKdAges();
   renderKdSnap(); renderKdRound(); renderKdMoves(); bindKdFind();
-  $('kdTrail').onclick = function () { KDM.trail = !KDM.trail; store('pda_kdm_trail', KDM.trail ? '1' : '0'); this.classList.toggle('active', KDM.trail); rpPaint(); };
+  $('kdTrail').onclick = function () {
+    KDM.trail = !KDM.trail; store('pda_kdm_trail', KDM.trail ? '1' : '0');
+    this.classList.toggle('active', KDM.trail); this.textContent = '➜ ความเคลื่อนไหว ' + (KDM.trail ? 'เปิด' : 'ปิด');
+    $('kdOptsSum').innerHTML = kdOptsSummary(); rpPaint();
+  };
   if (Date.now() - KDM.loadedAt > 60000) loadKdMoves();
 }
 // ยอด Kingdee ค้าง: ไฟล์ต้นทางยังอัปเดตเวลา แต่ตัวเลขไม่เปลี่ยนเลยเกิน 2 ชม. ทำงาน (จ.–ส. 08:00–18:00)
@@ -3501,7 +3512,7 @@ function renderKdSnap() {
   renderKdPub(); renderKdXfer(); renderKdCap();
   el.innerHTML = KD.loading ? '⏳ กำลังดึงยอด Kingdee…'
     : KD.err ? '<span class="err-text">' + esc(KD.err) + '</span>' + (KD.rows.length ? ' (ใช้ข้อมูลล่าสุดที่มี)' : '')
-    : KD.snapshotAt ? 'ยอด Kingdee ณ <b>' + esc(fmtWhen(kdSnapText())) + '</b> · ' + KD.rows.length.toLocaleString() + ' แถว · เช็คอัปเดตทุก 1 นาที' : '';
+    : KD.snapshotAt ? 'ยอด Kingdee ณ <b>' + esc(fmtWhen(kdSnapText())) + '</b> · ' + KD.rows.length.toLocaleString() + ' แถว' : '';
 }
 function renderKdRound() {
   var el = $('kdRound'); if (!el) return;
