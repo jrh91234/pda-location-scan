@@ -1575,10 +1575,56 @@ function shareScrapPhotosFromMenu() {
 }
 
 // ======================= Job order ที่ยังไม่ปิด (จากระบบ Job order tracking) =======================
-// แหล่งข้อมูล = ชีต "Plan" ของสเปรดชีต ลงยอด H9 ที่ Publish เป็น CSV (เดียวกับที่ jrh91234/Job-order-tracking ใช้)
-// เปลี่ยนแหล่งได้ด้วย Script Property JOB_PLAN_CSV_URL · ปิด = คอลัมน์ Status เป็น Closed / Close / Archive(d)
+// แหล่งข้อมูล = สเปรดชีต ลงยอด H9 ที่ Publish เป็น CSV (เดียวกับที่ jrh91234/Job-order-tracking ใช้)
+//  - แท็บ Plan (gid 1416776201): Job / รุ่น / Plan / Actual / Actual Scan / Status — ปิด = Status เป็น Closed / Close / Archive(d)
+//  - แท็บ ยอดผลิต (gid 934980474): ยอดสแกนรายครั้ง (FG Qty) — รวมต่อ Job (ไม่นับ VOID และสแกนซ้ำในวินาทีเดียวกัน)
+//  ยอด "ทำแล้ว" = ค่าที่มากที่สุดของ Actual, Actual Scan และยอดรวมจากแท็บยอดผลิต (กติกาเดียวกับ Job-order-tracking)
+// เปลี่ยนแหล่งได้ด้วย Script Property JOB_PLAN_CSV_URL / JOB_YOD_CSV_URL
 const JOB_PLAN_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRlXWxz5TKmlYhh7oxo3Fz2KgWK36xlJD8k9NTNK6XUFs5c1RRnYIkAYizQUzJHJofOGFAQaVvy47gT/pub?output=csv&gid=1416776201';
-const JOB_CACHE_KEY = 'open_jobs_v1';
+const JOB_YOD_GID = '934980474';
+const JOB_CACHE_KEY = 'open_jobs_v2';
+
+function jobCsv_(url) {
+  const res = UrlFetchApp.fetch(url + (url.indexOf('?') >= 0 ? '&' : '?') + '_t=' + Date.now(), { muteHttpExceptions: true, followRedirects: true });
+  if (res.getResponseCode() !== 200) throw new Error('HTTP ' + res.getResponseCode());
+  return Utilities.parseCsv(res.getContentText());
+}
+// หาคอลัมน์: ชื่อตรงตัวก่อน (ตามลำดับ) แล้วค่อยคำที่มีอยู่ในชื่อ — เหมือน findHeaderByPriority ของ Job-order-tracking
+function jobCol_(head, exact, contains) {
+  const low = head.map(function (h) { return String(h || '').trim().toLowerCase(); });
+  for (let i = 0; i < exact.length; i++) { const k = low.indexOf(exact[i].toLowerCase()); if (k >= 0) return k; }
+  for (let j = 0; j < low.length; j++) if ((contains || []).some(function (kw) { return low[j].indexOf(kw.toLowerCase()) >= 0; })) return j;
+  return -1;
+}
+function jobNum_(v) { const n = Number(String(v == null ? '' : v).replace(/,/g, '')); return isNaN(n) ? 0 : n; }
+
+/** ยอดสแกนรวมต่อ Job จากแท็บยอดผลิต { jobNo: qty } — อ่านไม่ได้ = {} (ใช้ยอดจาก Plan อย่างเดียว) */
+function jobYodTotals_(planUrl, want) {
+  const props = PropertiesService.getScriptProperties();
+  const url = props.getProperty('JOB_YOD_CSV_URL') || (/[?&]gid=\d+/.test(planUrl) ? planUrl.replace(/([?&]gid=)\d+/, '$1' + JOB_YOD_GID) : planUrl + '&gid=' + JOB_YOD_GID);
+  let rows;
+  try { rows = jobCsv_(url); } catch (e) { console.warn('ยอดผลิต: ' + e); return {}; }
+  if (rows.length < 2) return {};
+  const h = rows[0];
+  const jc = jobCol_(h, ['Job order No. หมายเลขกำกับงาน', 'Job order No.', 'Job order', 'Job No'], ['job order', 'job no', 'หมายเลขกำกับงาน']);
+  const qc = jobCol_(h, ['FG Qty (จำนวน)', 'FG Qty', 'fgqty'], ['fg qty', 'fgqty', 'จำนวน']);
+  const dc = jobCol_(h, ['Date'], ['date']), tc = jobCol_(h, ['Time (เวลา)', 'Time'], ['time', 'เวลา']);
+  const bc = jobCol_(h, ['Barcode', 'บาร์โค้ด'], ['barcode', 'บาร์โค้ด']), sc = jobCol_(h, ['Status', 'สถานะ'], ['status', 'สถานะ']);
+  if (jc < 0 || qc < 0) return {};
+  const tot = {}, seen = {};
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i], job = String(r[jc] || '').trim();
+    if (!job || !want[job]) continue;
+    const q = parseInt(String(r[qc] || '0').replace(/,/g, ''), 10);
+    if (isNaN(q) || q <= 0) continue;
+    if (sc >= 0 && String(r[sc] || 'OK').trim().toUpperCase() === 'VOID') continue;
+    const key = (bc >= 0 && String(r[bc] || '').trim() ? String(r[bc]).trim() : job) + '_' + (dc >= 0 ? String(r[dc] || '').trim() : '') + '_' + (tc >= 0 ? String(r[tc] || '').trim() : i);
+    if (seen[key]) continue;
+    seen[key] = 1;
+    tot[job] = (tot[job] || 0) + q;
+  }
+  return tot;
+}
 
 function getOpenJobs(force) {
   const cache = CacheService.getScriptCache();
@@ -1587,35 +1633,34 @@ function getOpenJobs(force) {
     if (hit) { try { return JSON.parse(hit); } catch (e) { /* แคชเสีย → ดึงใหม่ */ } }
   }
   const url = PropertiesService.getScriptProperties().getProperty('JOB_PLAN_CSV_URL') || JOB_PLAN_CSV_URL;
-  const res = UrlFetchApp.fetch(url + (url.indexOf('?') >= 0 ? '&' : '?') + '_t=' + Date.now(), { muteHttpExceptions: true, followRedirects: true });
-  if (res.getResponseCode() !== 200) throw new Error('ดึงรายการ Job order ไม่ได้ (HTTP ' + res.getResponseCode() + ')');
-  const rows = Utilities.parseCsv(res.getContentText());
+  let rows;
+  try { rows = jobCsv_(url); } catch (e) { throw new Error('ดึงรายการ Job order ไม่ได้ (' + e.message + ')'); }
   if (!rows.length) return { jobs: [], at: fmt_(new Date()) };
   const head = rows[0].map(function (h) { return String(h || '').trim(); });
-  const low = head.map(function (h) { return h.toLowerCase(); });
-  const find = function (pred) { for (let i = 0; i < head.length; i++) if (pred(head[i], low[i])) return i; return -1; };
-  let jc = find(function (h) { return h.indexOf('Job order No.') >= 0; });
-  if (jc < 0) jc = find(function (h, l) { return l.indexOf('job order') >= 0 || l.indexOf('job no') >= 0; });
-  let mc = find(function (h) { return h === 'Order model'; });
-  if (mc < 0) mc = find(function (h, l) { return l.indexOf('model') >= 0; });
-  let pc = find(function (h) { return h.indexOf('Plan จำนวน') >= 0; });
-  if (pc < 0) pc = find(function (h, l) { return l.indexOf('plan') >= 0; });
-  const ac = find(function (h, l) { return l === 'actual'; });
-  const sc = find(function (h, l) { return ['status', 'isclosed', 'state', 'job status', 'สถานะ'].indexOf(l) >= 0; });
-  const dc = find(function (h, l) { return l === 'date' || l.indexOf('date') === 0 || h.indexOf('วันที่') >= 0; });
+  const jc = jobCol_(head, ['Job order No. หมายเลขกำกับงาน', 'Job order No.'], ['job order no.', 'job order', 'job no']);
+  const mc = jobCol_(head, ['Order model'], ['model']);
+  const pc = jobCol_(head, [], ['plan จำนวน', 'plan']);
+  let ac = jobCol_(head, ['Actual'], []);
+  if (ac < 0) ac = head.findIndex(function (k) { const l = k.toLowerCase(); return l.indexOf('actual') >= 0 && l.indexOf('date') < 0 && l.replace(/\s/g, '').indexOf('actualscan') < 0; });
+  const asc = head.findIndex(function (k) { const l = k.toLowerCase().replace(/\s/g, ''); return l.indexOf('actualscan') >= 0 || l.indexOf('barcodeactual') >= 0 || l.indexOf('ยอดแสกน') >= 0 || l.indexOf('แสกนจริง') >= 0; });
+  const sc = jobCol_(head, ['status', 'isclosed', 'state', 'job status', 'สถานะ'], []);
+  const dc = jobCol_(head, ['Date'], ['date', 'วันที่']);
   if (jc < 0) throw new Error('ไม่พบคอลัมน์ Job order ในชีต Plan');
   const seen = {}, jobs = [];
   for (let i = rows.length - 1; i >= 1; i--) { // ล่าสุดก่อน
     const r = rows[i], no = String(r[jc] || '').trim();
     if (!no || seen[no]) continue;
-    const st = sc >= 0 ? String(r[sc] || '').trim().toLowerCase() : '';
-    if (st === 'closed' || st === 'close' || st === 'archive' || st === 'archived') { seen[no] = 1; continue; }
     seen[no] = 1;
-    const num = function (c) { if (c < 0) return ''; const n = Number(String(r[c] || '').replace(/,/g, '')); return isNaN(n) ? '' : n; };
-    jobs.push([no, mc >= 0 ? String(r[mc] || '').trim() : '', num(pc), num(ac), dc >= 0 ? String(r[dc] || '').trim() : '']);
+    const st = sc >= 0 ? String(r[sc] || '').trim().toLowerCase() : '';
+    if (st === 'closed' || st === 'close' || st === 'archive' || st === 'archived') continue;
+    jobs.push([no, mc >= 0 ? String(r[mc] || '').trim() : '', pc >= 0 ? jobNum_(r[pc]) : '',
+               Math.max(ac >= 0 ? jobNum_(r[ac]) : 0, asc >= 0 ? jobNum_(r[asc]) : 0), dc >= 0 ? String(r[dc] || '').trim() : '']);
     if (jobs.length >= 800) break;
   }
-  const out = { jobs: jobs, at: fmt_(new Date()) };
+  const want = {}; jobs.forEach(function (j) { want[j[0]] = 1; });
+  const yod = jobs.length ? jobYodTotals_(url, want) : {};
+  jobs.forEach(function (j) { j[3] = Math.max(j[3], yod[j[0]] || 0); });
+  const out = { jobs: jobs, at: fmt_(new Date()), yod: Object.keys(yod).length };
   try { cache.put(JOB_CACHE_KEY, JSON.stringify(out), 600); } catch (e) { /* ใหญ่เกินแคช → ข้าม */ }
   return out;
 }
