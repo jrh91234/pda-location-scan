@@ -91,6 +91,18 @@
       return h.map(function (b) { return b > 127 ? b - 256 : b; });
     },
     formatDate: function (d, tz, pattern) { return fmt(d, pattern); },
+    parseCsv: function (text) { // CSV แบบง่าย (รองรับ "…" และ "" ภายใน)
+      var out = [], row = [], cur = '', q = false;
+      for (var i = 0; i < text.length; i++) {
+        var ch = text[i];
+        if (q) { if (ch === '"') { if (text[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += ch; }
+        else if (ch === '"') q = true; else if (ch === ',') { row.push(cur); cur = ''; }
+        else if (ch === '\n' || ch === '\r') { if (ch === '\r' && text[i + 1] === '\n') i++; row.push(cur); out.push(row); row = []; cur = ''; }
+        else cur += ch;
+      }
+      if (cur !== '' || row.length) { row.push(cur); out.push(row); }
+      return out;
+    },
     // ไบต์จำลอง: เก็บ base64 ไว้ตรงๆ (length ≈ ขนาดไฟล์)
     base64Decode: function (s) { var o = { __b64: s, length: Math.floor(String(s).length * 3 / 4) }; return o; },
     base64Encode: function (bytes) { return bytes && bytes.__b64 || ''; },
