@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261128-0542'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261128-0546'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -379,6 +379,9 @@ function handleScan(raw) {
     scanned_at: new Date().toISOString(), dupChecked: false, dup: null
   });
   checkDraftDup();
+  if (S.location && S.draft.lot_no && pkgKey(S.draft.pkg_ref)) draftLotPkg(S.draft, S.location).then(function (list) {
+    if (list.length && S.draft && S.draft._lp && S.draft._lp.loc === S.location) setMsg('warn', '⚠ Lot ' + esc(S.draft.lot_no) + ' · Pkg ' + esc(S.draft.pkg_ref) + ' ซ้ำกับ <b>' + esc(list.map(function (r) { return r.part_code; }).join(', ')) + '</b> ในช่อง ' + esc(S.location) + ' — ตรวจป้ายก่อนบันทึก');
+  });
   var dup = draftDup(S.draft);
   if (dup) { beep(false); setMsg('err', dupMsg(dup)); return; }
   if (draftSamePkg(S.draft).length) { beep(false); setMsg('err', pkgDupMsg(draftSamePkg(S.draft))); return; }
@@ -416,6 +419,13 @@ function camContinuous(raw) {
     return { cls: 'err', html: '⚠ <b>' + esc(p.part_code) + '</b> Package ' + esc(p.pkg_ref) + ' มีอยู่แล้วที่ <b>' + sp.map(function (r) { return esc(r.location); }).join(', ') +
       '</b> — ไม่ได้บันทึก · ปิดกล้องแล้วสแกนแบบปกติเพื่อเลือก "แบ่งกล่อง" หรือ "แทนที่"' };
   }
+  var lp = S.location ? localLotPkg(S.location, d) : [];
+  if (lp.length) {
+    beep(false);
+    return { cls: 'err', html: '⚠ <b>' + esc(p.part_code) + '</b> Lot ' + esc(p.lot_no) + ' · Pkg ' + esc(p.pkg_ref) + ' ซ้ำกับ <b>' + esc(lp.map(function (r) { return r.part_code; }).join(', ')) +
+      '</b> ในช่องนี้ — ไม่ได้บันทึก · ปิดกล้องแล้วสแกนแบบปกติเพื่อยืนยัน' };
+  }
+  d.lotPkgChoice = 'local'; // สแกนต่อเนื่อง: เช็คในเครื่องแล้ว ไม่เปิดหน้าต่างยืนยันระหว่างกล้องเปิด
   S.draft = d;
   saveDraft(); // บันทึก + ปี๊บ + ส่งขึ้นเซิร์ฟเวอร์เบื้องหลัง
   // เช็คกับชีตตามหลัง (ข้อมูลจากเครื่องอื่น) → ติดคำเตือนที่รายการ
@@ -463,6 +473,45 @@ function samePkgLine(r) {
   return '<span class="loc-pill">' + esc(r.location) + '</span> ' + (r.qty !== '' ? esc(fmtQty(r.qty, r.unit)) : '<span class="muted">ไม่มียอด</span>') +
     ' <span class="muted small">' + (r.status === 'pending' ? 'รอส่ง (เครื่องนี้)' : esc(r.scanned_by || '') + ' · ' + esc(String(r.scanned_at || '').replace('T', ' ').slice(0, 16))) + '</span>';
 }
+// ===== Lot + Package ซ้ำในช่องเดียวกัน (รหัสสินค้าต่างกัน) =====
+// เช่น CP-07-03A มี 1005QT00306 กับ 1005QT00414 Lot 2026083001 Pkg 0001 ทั้งคู่ → อาจสแกนป้ายผิดกล่อง — เตือนให้ยืนยันก่อนบันทึก
+function lotPkgSame(a, loc, b) {
+  return !!(a && b && a.location === loc && String(b.lot_no || '') && pkgKey(b.pkg_ref) && String(a.lot_no || '') === String(b.lot_no || '') &&
+    pkgKey(a.pkg_ref) === pkgKey(b.pkg_ref) && String(a.part_code || '').toUpperCase() !== String(b.part_code || '').toUpperCase() && a.qr_raw !== b.qr_raw);
+}
+function localLotPkg(loc, d) {
+  return S.recent.filter(function (r) { return (r.status === 'pending' || r.status === 'saved') && lotPkgSame(r, loc, d); });
+}
+// เช็คในเครื่อง + ชีต (ถ้าต่อเน็ตได้) → Promise<รายการที่ซ้ำ>
+function checkLotPkg(loc, d) {
+  var local = localLotPkg(loc, d);
+  if (!d.lot_no || !pkgKey(d.pkg_ref) || !apiUrl()) return Promise.resolve(local);
+  return api('findLotPkgAt', loc, d.lot_no, d.pkg_ref, d.part_code, d.qr_raw).then(function (list) {
+    var seen = {}, out = [];
+    local.concat(list || []).forEach(function (r) {
+      if (seen[r.scan_id]) return; seen[r.scan_id] = 1;
+      var lr = findRecent(r.scan_id); if (lr && (lr.status === 'deleted' || lr.status === 'out')) return;
+      out.push(r);
+    });
+    return out;
+  }, function () { return local; }); // เน็ตหลุด → ใช้ผลในเครื่อง
+}
+// เริ่มเช็คตั้งแต่ตอนสแกน (ถ้ามี Location แล้ว) → กดบันทึกแล้วได้ผลทันที ไม่ต้องรอเซิร์ฟเวอร์
+function draftLotPkg(d, loc) {
+  // _lp อาจมาจาก draft ที่เก็บใน localStorage (Promise กลายเป็น {}) → เริ่มใหม่
+  if (!d._lp || d._lp.loc !== loc || !d._lp.p || typeof d._lp.p.then !== 'function') d._lp = { loc: loc, p: checkLotPkg(loc, d) };
+  return d._lp.p;
+}
+function lotPkgConfirm(loc, d, list, onOk) {
+  beep(false);
+  confirmModal('⚠ Lot + Package ซ้ำในช่อง ' + esc(loc),
+    'ช่องนี้มีกล่อง <b>Lot ' + esc(d.lot_no) + ' · Pkg ' + esc(d.pkg_ref) + '</b> อยู่แล้ว แต่เป็นคนละรหัสสินค้า:' +
+    '<div class="card-lite small">' + list.map(function (r) { return '<b>' + esc(r.part_code) + '</b> ' + (r.qty !== '' ? esc(fmtQty(r.qty, r.unit)) : '') + ' <span class="muted">' + esc(r.scanned_by || '') + '</span>'; }).join('<br>') + '</div>' +
+    'กำลังจะบันทึก <b>' + esc(d.part_code) + '</b>' + (d.qty !== '' ? ' ' + esc(fmtQty(d.qty, d.unit)) : '') +
+    '<br><span class="small">ตรวจป้ายว่าไม่ได้สแกนผิดกล่อง — ถ้าเป็นพาเลทเดียวที่มีหลายสินค้าจริง กด "บันทึกต่อ"</span>',
+    'บันทึกต่อ (คนละสินค้า)', onOk);
+}
+
 function findSavedDuplicate(qr) {
   return S.recent.filter(function (r) { return r.qr_raw === qr && (r.status === 'pending' || r.status === 'saved'); })[0];
 }
@@ -527,6 +576,18 @@ function saveDraft() {
   var dup = draftDup(d);
   if (dup) { beep(false); setMsg('err', dupMsg(dup)); return; }
   if (!d.pkgChoice && draftSamePkg(d).length) { beep(false); setMsg('err', pkgDupMsg(draftSamePkg(d))); renderDraft(); return; }
+  if (!d.lotPkgChoice) {
+    var loc0 = S.location;
+    if (!(d._lp && d._lp.loc === loc0)) setMsg('idle', '🔎 ตรวจ Lot + Package ในช่อง ' + esc(loc0) + '…');
+    draftLotPkg(d, loc0).then(function (list) {
+      if (S.draft !== d || S.location !== loc0) return; // เปลี่ยนรายการ/ช่องระหว่างรอ
+      d.lotPkgChoice = list.length ? '' : 'ok';
+      if (!list.length) { saveDraft(); return; }
+      setMsg('warn', '⚠ Lot ' + esc(d.lot_no) + ' · Pkg ' + esc(d.pkg_ref) + ' ซ้ำกับ <b>' + esc(list.map(function (r) { return r.part_code; }).join(', ')) + '</b> ในช่องนี้ — ตรวจป้ายก่อนบันทึก');
+      lotPkgConfirm(loc0, d, list, function () { if (S.draft === d) { d.lotPkgChoice = 'confirmed'; d.pkgNote = [d.pkgNote, 'ยืนยัน Lot+Pkg ซ้ำกับ ' + list.map(function (r) { return r.part_code; }).join(', ')].filter(function (x) { return x && String(x).trim(); }).join(' · '); saveDraft(); } });
+    });
+    return;
+  }
   var item = {
     scan_id: uid(), scanned_at: d.scanned_at || new Date().toISOString(), location: S.location,
     qr_raw: d.qr_raw, part_code: d.part_code, lot_no: d.lot_no, qty: d.qty, unit: d.unit, pkg_ref: d.pkg_ref,
@@ -2101,6 +2162,20 @@ function saveManual() {
   var qr = fromQr ? manualSrc.qr_raw : ['MANUAL', part, lot, qty, pkg, id.slice(0, 8)].join('|');
   var dup = findSavedDuplicate(qr);
   if (dup) { beep(false); setMsg('err', '⚠ QR นี้บันทึกแล้วที่ <b>' + esc(dup.location) + '</b>'); return; }
+  var probe = { part_code: part, lot_no: lot, pkg_ref: pkg, qty: qty, unit: unit, qr_raw: qr };
+  var okKey = [part, lot, pkg, qty, S.location].join('|'); // ไม่ใช้ qr (กรอกเองสร้าง qr ใหม่ทุกครั้ง)
+  if (saveManual.okFor !== okKey) {
+    var loc0 = S.location, btn = $('mfSave');
+    if (btn) btn.disabled = true;
+    checkLotPkg(loc0, probe).then(function (list) {
+      if (btn) btn.disabled = false;
+      if (!list.length) { saveManual.okFor = okKey; saveManual(); return; }
+      lotPkgConfirm(loc0, probe, list, function () { saveManual.okFor = okKey; saveManual.lpNote = 'ยืนยัน Lot+Pkg ซ้ำกับ ' + list.map(function (r) { return r.part_code; }).join(', '); saveManual(); });
+    });
+    return;
+  }
+  saveManual.okFor = '';
+  if (saveManual.lpNote) { note = [note, saveManual.lpNote].filter(function (x) { return x && String(x).trim(); }).join(' · '); saveManual.lpNote = ''; }
   var item = {
     scan_id: id, scanned_at: new Date().toISOString(), location: S.location,
     qr_raw: qr, part_code: part, lot_no: lot, qty: qty, unit: unit, pkg_ref: pkg,

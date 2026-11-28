@@ -19,7 +19,7 @@ const TZ = 'Asia/Bangkok';
 const MAX_BATCH = 50;
 
 // ======================= Web App =======================
-const API_ACTIONS = { ping: ping, outScan: outScan, getOpenJobs: getOpenJobs, saveScans: saveScans, listScans: listScans, deleteScan: deleteScan, updateQty: updateQty, updateLocation: updateLocation, findByQr: findByQr, findSamePkg: findSamePkg, findPackage: findPackage, getScans: getScans, getTimeline: getTimeline, getPartPackages: getPartPackages, getLocationMap: getLocationMap, getLocationEvents: getLocationEvents,
+const API_ACTIONS = { ping: ping, outScan: outScan, findLotPkgAt: findLotPkgAt, getOpenJobs: getOpenJobs, saveScans: saveScans, listScans: listScans, deleteScan: deleteScan, updateQty: updateQty, updateLocation: updateLocation, findByQr: findByQr, findSamePkg: findSamePkg, findPackage: findPackage, getScans: getScans, getTimeline: getTimeline, getPartPackages: getPartPackages, getLocationMap: getLocationMap, getLocationEvents: getLocationEvents,
   uploadPhoto: uploadPhoto, getPhoto: getPhoto, deletePhoto: deletePhoto,
   getCountState: getCountState, setCountRound: setCountRound, markBinCounted: markBinCounted, getKingdeeMoves: getKingdeeMoves, getBinAges: getBinAges,
   getCountProfile: getCountProfile, saveCountProfile: saveCountProfile, saveCountSample: saveCountSample,
@@ -395,6 +395,17 @@ function findSamePkg(part, lot, pkg, qr) {
  * กล่องนี้อยู่ไหน: ป้ายใบเดียวกัน (QR ตรงทั้งใบ) หรือ รหัส + Lot + Package เดียวกัน — ล่าสุดก่อน, สูงสุด 10
  * คืน [{...scan, exact:true|false}]
  */
+/** กล่องที่ยังอยู่ในช่องนี้ ที่ Lot + Package ตรงกัน แต่รหัสสินค้าต่างกัน (เตือนก่อนบันทึก — อาจสแกนป้ายผิดกล่อง) */
+function findLotPkgAt(loc, lot, pkg, part, qr) {
+  loc = clean_(loc, 40).toUpperCase(); lot = clean_(lot, 80); part = clean_(part, 80).toUpperCase(); qr = clean_(qr, 500);
+  const pk = pkgKey_(clean_(pkg, 80));
+  if (!loc || !lot || !pk) return [];
+  return readAll_(sheet_()).filter(function (r) {
+    return !gone_(r.status) && String(r.location).toUpperCase() === loc && String(r.lot_no) === lot && pkgKey_(r.pkg_ref) === pk &&
+      String(r.part_code).toUpperCase() !== part && String(r.qr_raw) !== qr;
+  }).slice(0, 10).map(toClient_);
+}
+
 function findPackage(qr, part, lot, pkg) {
   const chk = checkQr_(clean_(qr, 500)), q = chk.text || '';
   part = clean_(part, 80).toUpperCase(); lot = clean_(lot, 80); const pk = pkgKey_(clean_(pkg, 80));
