@@ -9,14 +9,17 @@
 const SHEET_NAME = 'Scans';
 const HEADERS = ['scan_id', 'scanned_at', 'saved_at', 'location', 'qr_raw', 'part_code', 'lot_no', 'qty', 'unit',
                  'pkg_ref', 'scanned_by', 'device', 'status', 'deleted_by', 'deleted_at', 'delete_reason',
-                 'qty_original', 'edited_by', 'edited_at', 'edit_note', 'location_original', 'note'];
+                 'qty_original', 'edited_by', 'edited_at', 'edit_note', 'location_original', 'note',
+                 'out_by', 'out_at', 'out_reason', 'out_qty'];
+// รายการที่ไม่อยู่ใน Location แล้ว: deleted = ลบ (บันทึกผิด) · out = เอาออก (เบิก/ย้ายออกจริง)
+function gone_(status) { status = String(status || ''); return status === 'deleted' || status === 'out'; }
 // คอลัมน์ที่ต้องเก็บเป็นข้อความ (กันเลข 0 นำหน้าหาย / กัน Sheets แปลงเป็นวันที่หรือตัวเลข)
-const TEXT_COLS = ['scan_id', 'location', 'location_original', 'qr_raw', 'part_code', 'lot_no', 'pkg_ref', 'scanned_by', 'device'];
+const TEXT_COLS = ['scan_id', 'location', 'location_original', 'qr_raw', 'part_code', 'lot_no', 'pkg_ref', 'scanned_by', 'device', 'out_by'];
 const TZ = 'Asia/Bangkok';
 const MAX_BATCH = 50;
 
 // ======================= Web App =======================
-const API_ACTIONS = { ping: ping, saveScans: saveScans, listScans: listScans, deleteScan: deleteScan, updateQty: updateQty, updateLocation: updateLocation, findByQr: findByQr, findSamePkg: findSamePkg, findPackage: findPackage, getScans: getScans, getTimeline: getTimeline, getPartPackages: getPartPackages, getLocationMap: getLocationMap, getLocationEvents: getLocationEvents,
+const API_ACTIONS = { ping: ping, outScan: outScan, saveScans: saveScans, listScans: listScans, deleteScan: deleteScan, updateQty: updateQty, updateLocation: updateLocation, findByQr: findByQr, findSamePkg: findSamePkg, findPackage: findPackage, getScans: getScans, getTimeline: getTimeline, getPartPackages: getPartPackages, getLocationMap: getLocationMap, getLocationEvents: getLocationEvents,
   uploadPhoto: uploadPhoto, getPhoto: getPhoto, deletePhoto: deletePhoto,
   getCountState: getCountState, setCountRound: setCountRound, markBinCounted: markBinCounted, getKingdeeMoves: getKingdeeMoves, getBinAges: getBinAges,
   getCountProfile: getCountProfile, saveCountProfile: saveCountProfile, saveCountSample: saveCountSample,
@@ -112,7 +115,9 @@ function toClient_(o) {
     deleted_at: fmt_(o.deleted_at), delete_reason: String(o.delete_reason || ''),
     qty_original: o.qty_original === '' || o.qty_original == null ? '' : Number(o.qty_original),
     edited_by: String(o.edited_by || ''), edited_at: fmt_(o.edited_at), edit_note: String(o.edit_note || ''),
-    location_original: String(o.location_original || ''), note: String(o.note || '')
+    location_original: String(o.location_original || ''), note: String(o.note || ''),
+    out_by: String(o.out_by || ''), out_at: fmt_(o.out_at), out_reason: String(o.out_reason || ''),
+    out_qty: o.out_qty === '' || o.out_qty == null ? '' : Number(o.out_qty)
   };
 }
 
@@ -168,7 +173,7 @@ function saveScans(items) {
     const byId = {}, activeByQr = {};
     rows.forEach(function (r) {
       byId[String(r.scan_id)] = r;
-      if (String(r.status) !== 'deleted') activeByQr[String(r.qr_raw)] = r;
+      if (!gone_(r.status)) activeByQr[String(r.qr_raw)] = r;
     });
     const allowDup = allowDuplicate_();
     const now = new Date();
@@ -245,11 +250,11 @@ function listScans(filter) {
     if (r.scanned_by && users.indexOf(r.scanned_by) < 0) users.push(r.scanned_by); // รายชื่อผู้บันทึกทั้งหมด ล่าสุดก่อน (วนจากท้ายชีต)
     // รายการ Lot ที่มีในระบบ (ล่าสุดก่อน) — ใช้แนะนำตอนพิมพ์ค้นหา: [lot, รหัสสินค้า, จำนวนกล่อง]
     const lotNo = String(r.lot_no || '');
-    if (lotNo && r.status !== 'deleted') {
+    if (lotNo && !gone_(r.status)) {
       if (lotNo in lotIdx) lots[lotIdx[lotNo]][2]++;
       else if (lots.length < 3000) { lotIdx[lotNo] = lots.length; lots.push([lotNo, r.part_code, 1]); }
     }
-    if (!filter.includeDeleted && r.status === 'deleted') continue;
+    if (!filter.includeDeleted && gone_(r.status)) continue;
     if (from || to || shift) {
       const ws = workShift_(r.scanned_at);
       if (from && ws.date < from) continue;
@@ -259,7 +264,7 @@ function listScans(filter) {
     if (loc && r.location.indexOf(loc) !== 0) continue;
     if (user && (filter.userExact ? r.scanned_by.toLowerCase() !== user : r.scanned_by.toLowerCase().indexOf(user) < 0)) continue;
     if (q && (r.qr_raw + ' ' + r.part_code + ' ' + r.lot_no).toLowerCase().indexOf(q) < 0 && !(qParts[r.part_code])) continue;
-    if (r.status !== 'deleted') {
+    if (!gone_(r.status)) {
       total++;
       locs[r.location] = 1;
       parts[r.part_code] = 1;
@@ -276,7 +281,7 @@ function getLocationMap(opt) {
   const rows = readAll_(sheet_()).map(toClient_);
   const map = {}, items = [];
   rows.forEach(function (r) {
-    if (r.status === 'deleted' || !r.location) return;
+    if (gone_(r.status) || !r.location) return;
     items.push([r.location, r.part_code, r.lot_no, String(r.scanned_at).slice(0, 16), r.qty, r.unit, r.scanned_by, String(r.edited_at || '').slice(0, 16)]); // ใช้ค้นหาบนผัง + FIFO + เทียบ Kingdee (ตัดผู้ทดสอบ)
     const m = map[r.location] || (map[r.location] = { n: 0, today: 0, last: '', by: '' });
     m.n++;
@@ -366,7 +371,7 @@ function findByQr(qr) {
   if (!chk.text) return null;
   const rows = readAll_(sheet_());
   for (let i = rows.length - 1; i >= 0; i--) {
-    if (String(rows[i].qr_raw) === chk.text && String(rows[i].status) !== 'deleted') return toClient_(rows[i]);
+    if (String(rows[i].qr_raw) === chk.text && !gone_(rows[i].status)) return toClient_(rows[i]);
   }
   return null;
 }
@@ -381,7 +386,7 @@ function findSamePkg(part, lot, pkg, qr) {
   part = clean_(part, 80).toUpperCase(); lot = clean_(lot, 80); const pk = pkgKey_(clean_(pkg, 80)); qr = clean_(qr, 500);
   if (!part || !pk) return [];
   return readAll_(sheet_()).filter(function (r) {
-    return String(r.status) !== 'deleted' && String(r.part_code).toUpperCase() === part && String(r.lot_no) === lot &&
+    return !gone_(r.status) && String(r.part_code).toUpperCase() === part && String(r.lot_no) === lot &&
       pkgKey_(r.pkg_ref) === pk && String(r.qr_raw) !== qr;
   }).slice(-10).map(toClient_);
 }
@@ -396,7 +401,7 @@ function findPackage(qr, part, lot, pkg) {
   if (!q && !(part && pk)) return [];
   const out = [], rows = readAll_(sheet_());
   for (let i = rows.length - 1; i >= 0 && out.length < 10; i--) {
-    const r = rows[i]; if (String(r.status) === 'deleted') continue;
+    const r = rows[i]; if (gone_(r.status)) continue;
     const exact = !!q && String(r.qr_raw) === q;
     const same = !!pk && String(r.part_code).toUpperCase() === part && String(r.lot_no) === lot && pkgKey_(r.pkg_ref) === pk;
     if (exact || same) { const c = toClient_(r); c.exact = exact; out.push(c); }
@@ -427,7 +432,7 @@ function updateQty(scanId, qty, editedBy, note) {
     const sh = sheet_();
     const row = readAll_(sh).filter(function (r) { return String(r.scan_id) === id; })[0];
     if (!row) throw new Error('ไม่พบรายการนี้ในระบบ');
-    if (String(row.status) === 'deleted') throw new Error('รายการนี้ถูกลบแล้ว แก้ยอดไม่ได้');
+    if (gone_(row.status)) throw new Error(String(row.status) === 'out' ? 'รายการนี้เอาออกแล้ว แก้ยอดไม่ได้' : 'รายการนี้ถูกลบแล้ว แก้ยอดไม่ได้');
     const now = new Date();
     const prevQty = row.qty;
     const orig = row.qty_original === '' || row.qty_original == null ? row.qty : row.qty_original;
@@ -459,7 +464,7 @@ function updateLocation(scanId, location, editedBy, note) {
     const sh = sheet_();
     const row = readAll_(sh).filter(function (r) { return String(r.scan_id) === id; })[0];
     if (!row) throw new Error('ไม่พบรายการนี้ในระบบ');
-    if (String(row.status) === 'deleted') throw new Error('รายการนี้ถูกลบแล้ว ย้าย Location ไม่ได้');
+    if (gone_(row.status)) throw new Error(String(row.status) === 'out' ? 'รายการนี้เอาออกแล้ว ย้าย Location ไม่ได้' : 'รายการนี้ถูกลบแล้ว ย้าย Location ไม่ได้');
     if (String(row.location) === loc) return toClient_(row);
     const now = new Date();
     const prevLoc = String(row.location);
@@ -480,6 +485,51 @@ function updateLocation(scanId, location, editedBy, note) {
   }
 }
 
+/**
+ * เอาออกจาก Location (เบิกไปผลิต / ย้ายไปคลังอื่น ฯลฯ) — ต่างจากลบ (ลบ = บันทึกผิด)
+ * opt: { qty, reason } · qty ว่าง หรือ ≥ ยอดคงเหลือ = เอาออกทั้งกล่อง (status = out) · น้อยกว่า = เอาออกบางส่วน (ลดยอด กล่องยังอยู่)
+ */
+function outScan(scanId, by, opt) {
+  opt = opt || {};
+  const id = clean_(scanId, 64);
+  by = clean_(by, 60);
+  const reason = clean_(opt.reason, 200);
+  if (!id) throw new Error('ไม่พบรหัสรายการ');
+  if (!by) throw new Error('กรุณาระบุชื่อผู้เอาออก');
+  if (!reason) throw new Error('กรุณาเลือกเหตุผล');
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const sh = sheet_();
+    const row = readAll_(sh).filter(function (r) { return String(r.scan_id) === id; })[0];
+    if (!row) throw new Error('ไม่พบรายการนี้ในระบบ');
+    if (String(row.status) === 'out') throw new Error('รายการนี้เอาออกไปแล้ว');
+    if (String(row.status) === 'deleted') throw new Error('รายการนี้ถูกลบแล้ว');
+    const cur = row.qty === '' || row.qty == null || isNaN(Number(row.qty)) ? null : Number(row.qty);
+    const q = opt.qty === '' || opt.qty == null ? null : Number(opt.qty);
+    if (q != null && (isNaN(q) || q <= 0)) throw new Error('จำนวนที่เอาออกไม่ถูกต้อง');
+    if (q != null && cur != null && q > cur + 1e-9) throw new Error('เอาออกได้ไม่เกินยอดคงเหลือ ' + cur);
+    const now = new Date(), set = {};
+    const full = q == null || cur == null || q >= cur - 1e-9;
+    if (full) {
+      Object.assign(set, { status: 'out', out_by: by, out_at: now, out_reason: reason, out_qty: cur == null ? (q == null ? '' : q) : cur });
+    } else {
+      const left = Math.round((cur - q) * 1000) / 1000;
+      Object.assign(set, { qty: left, edited_by: by, edited_at: now, edit_note: 'เอาออก ' + q + ': ' + reason });
+      if (row.qty_original === '' || row.qty_original == null) set.qty_original = cur;
+    }
+    Object.keys(set).forEach(function (k) { sh.getRange(row._row, HEADERS.indexOf(k) + 1).setValue(set[k]); row[k] = set[k]; });
+    logEvents_([{ scan_id: id, event: full ? 'out' : 'out_part', part_code: row.part_code, qr_raw: row.qr_raw, location_from: row.location,
+                  qty_from: cur == null ? '' : cur, qty_to: full ? 0 : row.qty, unit: row.unit, by: by, at: now,
+                  note: reason + (full ? '' : ' · เอาออก ' + q + ' ' + row.unit) }]);
+    const rec = toClient_(row);
+    rec.partial = !full;
+    return rec;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 /** ลบแบบ soft delete — แถวยังอยู่ในชีต (status = deleted) เพื่อให้ตรวจสอบย้อนหลังได้ */
 function deleteScan(scanId, deletedBy, reason) {
   const id = clean_(scanId, 64);
@@ -493,6 +543,7 @@ function deleteScan(scanId, deletedBy, reason) {
     const row = readAll_(sh).filter(function (r) { return String(r.scan_id) === id; })[0];
     if (!row) throw new Error('ไม่พบรายการนี้ในระบบ');
     if (String(row.status) === 'deleted') return toClient_(row);
+    if (String(row.status) === 'out') throw new Error('รายการนี้เอาออกแล้ว ลบไม่ได้');
     const c = HEADERS.indexOf('status') + 1;
     const now = new Date();
     sh.getRange(row._row, c, 1, 4).setValues([['deleted', by, now, clean_(reason, 200)]]);
@@ -742,7 +793,7 @@ function getPartPackages(partCode) {
   const part = clean_(partCode, 80).toUpperCase();
   if (!part) throw new Error('ไม่พบรหัสสินค้า');
   const rows = readAll_(sheet_()).map(toClient_).filter(function (r) {
-    return r.status !== 'deleted' && r.part_code.toUpperCase() === part;
+    return !gone_(r.status) && r.part_code.toUpperCase() === part;
   });
   rows.sort(function (a, b) { return a.location < b.location ? -1 : a.location > b.location ? 1 : 0; });
   const totals = {}, locs = {};

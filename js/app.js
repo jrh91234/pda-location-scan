@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261127-1020'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261128-0252'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -181,7 +181,10 @@ function refreshHeader() {
 // ช่องสแกนสร้างครั้งเดียว ส่วนอื่นอัปเดตแยก — กันตัวอักษรหายระหว่าง DataWedge กำลังพิมพ์
 function renderScan() {
   $('main').innerHTML =
-    '<section id="locCard" class="loc-card"></section>' +
+    '<div class="seg io-seg"><button type="button" data-io="in" class="' + (S.outMode ? '' : 'active') + '">📥 เก็บเข้า Location</button>' +
+      '<button type="button" data-io="out" class="' + (S.outMode ? 'active out' : '') + '">📤 เอาออก</button></div>' +
+    (S.outMode ? '<section class="out-card"><b>📤 โหมดเอาออก</b><div class="small">สแกน QR กล่องที่จะเอาออกจาก Location (เบิกไปผลิต / ย้ายไปคลังอื่น ฯลฯ) · ไม่ต้องเลือก Location</div></section>'
+      : '<section id="locCard" class="loc-card"></section>') +
     '<div id="kdLoc"></div>' +
     '<section class="scan-box">' +
       '<input id="scanInput" class="scan-input" inputmode="none" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="กดปุ่มสแกนที่ตัวเครื่อง">' +
@@ -208,7 +211,15 @@ function renderScan() {
     if (inp.getAttribute('inputmode') === 'text') return; // พิมพ์เอง → รอ Enter
     scanIdleTimer = setTimeout(commitScanInput, SCAN_IDLE_MS);
   });
-  $('btnCam').onclick = function () { openCameraScanner(handleScan, { onEach: camContinuous }); };
+  $('btnCam').onclick = function () { openCameraScanner(handleScan, S.outMode ? {} : { onEach: camContinuous }); };
+  Array.prototype.forEach.call(document.querySelectorAll('[data-io]'), function (b) {
+    b.onclick = function () {
+      var out = b.getAttribute('data-io') === 'out'; if (out === !!S.outMode) return;
+      S.outMode = out; if (out) setDraft(null);
+      S.msg = out ? { type: 'warn', text: '📤 โหมดเอาออก — สแกน QR กล่องที่จะเอาออก', at: Date.now() } : null;
+      renderScan();
+    };
+  });
   $('btnType').onclick = function () {
     inp.setAttribute('inputmode', 'text');
     inp.blur(); setTimeout(function () { inp.focus(); }, 30);
@@ -271,7 +282,7 @@ function renderSync() {
   refreshHeader();
 }
 
-var STATUS_TEXT = { pending: 'รอส่ง', saved: 'บันทึกแล้ว', duplicate: 'ซ้ำ', error: 'ผิดพลาด', deleted: 'ลบแล้ว' };
+var STATUS_TEXT = { pending: 'รอส่ง', saved: 'บันทึกแล้ว', duplicate: 'ซ้ำ', error: 'ผิดพลาด', deleted: 'ลบแล้ว', out: 'เอาออกแล้ว' };
 
 function renderRecent() {
   var el = $('recent'); if (!el) return;
@@ -283,7 +294,7 @@ function renderRecent() {
   if ($('count')) $('count').textContent = 'วันนี้บันทึก ' + savedToday + ' รายการ';
   renderKdLoc();
   // รายการที่ลบแล้วไม่ต้องแสดงในหน้าสแกน (ดูได้ที่หน้าประวัติ → แสดงรายการที่ลบแล้ว)
-  var shown = S.recent.filter(function (r) { return r.status !== 'deleted'; });
+  var shown = S.recent.filter(function (r) { return r.status !== 'deleted' && r.status !== 'out'; });
   if (!shown.length) { el.innerHTML = '<div class="empty-list muted">ยังไม่มีรายการ</div>'; return; }
   el.innerHTML = shown.slice(0, 60).map(function (r) {
     var extra = '';
@@ -352,6 +363,7 @@ function handleScan(raw) {
     return;
   }
   if (S.view !== 'scan') return;
+  if (S.outMode) { outLookup(text, chk); return; }
 
   if (chk.error) {
     beep(false);
@@ -442,7 +454,7 @@ function draftSamePkg(d) {
   out.forEach(function (r) { seen[r.scan_id] = 1; });
   (d.pkgDup || []).forEach(function (r) {
     if (seen[r.scan_id]) return;
-    var loc = findRecent(r.scan_id); if (loc && loc.status === 'deleted') return;
+    var loc = findRecent(r.scan_id); if (loc && (loc.status === 'deleted' || loc.status === 'out')) return;
     seen[r.scan_id] = 1; out.push(r);
   });
   return out;
@@ -697,7 +709,7 @@ function editRecentQty(id) {
 }
 
 function editHistoryQty(row) {
-  if (!row || row.status === 'deleted') return;
+  if (!row || row.status === 'deleted' || row.status === 'out') return;
   if (!S.user) { openUserModal(); return; }
   openQtyModal({ rec: row, needReason: true, onSave: function (q, note) {
     return api('updateQty', row.scan_id, q, S.user, note).then(function (rec) { applyServerQty(rec); renderHistoryList(); });
@@ -771,7 +783,7 @@ function editRecentLocation(id) {
 }
 
 function editHistoryLocation(row) {
-  if (!row || row.status === 'deleted') return;
+  if (!row || row.status === 'deleted' || row.status === 'out') return;
   if (!S.user) { openUserModal(); return; }
   pickNewLocation(row, function (code) {
     confirmMoveModal(row, code, function (note) {
@@ -804,12 +816,12 @@ function dupMsg(dup) {
 }
 
 var SYNC_FIELDS = ['location', 'location_original', 'qty', 'unit', 'qty_original', 'part_code', 'lot_no', 'pkg_ref',
-                   'edited_by', 'edited_at', 'deleted_by', 'deleted_at', 'delete_reason'];
+                   'edited_by', 'edited_at', 'deleted_by', 'deleted_at', 'delete_reason', 'out_by', 'out_at', 'out_reason', 'out_qty'];
 
 // อัปเดตรายการในเครื่องจากข้อมูลในชีต — คืน true ถ้ามีอะไรเปลี่ยน
 function upsertRecent(rec, addIfMissing) {
   if (!rec || !rec.scan_id) return false;
-  var st = rec.status === 'deleted' ? 'deleted' : 'saved';
+  var st = rec.status === 'deleted' || rec.status === 'out' ? rec.status : 'saved';
   var r = findRecent(rec.scan_id);
   if (!r) {
     if (!addIfMissing) return false;
@@ -818,7 +830,7 @@ function upsertRecent(rec, addIfMissing) {
     S.recent.unshift(item);
     return true;
   }
-  if (r.status !== 'saved' && r.status !== 'deleted') return false; // รอส่ง/ซ้ำ/ผิดพลาด = สถานะของเครื่อง
+  if (r.status !== 'saved' && r.status !== 'deleted' && r.status !== 'out') return false; // รอส่ง/ซ้ำ/ผิดพลาด = สถานะของเครื่อง
   var changed = r.status !== st;
   r.status = st;
   SYNC_FIELDS.forEach(function (k) {
@@ -920,6 +932,73 @@ function dropLocal(id) {
 }
 
 // ---------- ลบ ----------
+// ======================= เอาออกจาก Location =======================
+// ต่างจาก "ลบ" (บันทึกผิด): เอาออก = ของออกจากช่องจริง (เบิกไปผลิต / ย้ายไปคลังอื่น) · เอาออกบางส่วนได้ (ลดยอด กล่องยังอยู่)
+var OUT_REASONS = ['เบิกไปผลิต', 'ย้ายไปคลังอื่น', 'ส่งคืน Supplier', 'ของเสีย / Scrap', 'อื่นๆ'];
+
+function outLookup(text, chk) {
+  if (chk && chk.error) { beep(false); setMsg('err', '❌ ' + esc(chk.error)); return; }
+  var p = parseQr(text);
+  var pend = S.recent.filter(function (r) { return r.status === 'pending' && r.qr_raw === p.qr_raw; })[0];
+  if (pend) { beep(false); setMsg('err', 'กล่องนี้ยัง "รอส่ง" อยู่ในเครื่อง — รอให้ส่งขึ้นระบบก่อน แล้วสแกนเอาออกอีกครั้ง'); return; }
+  setMsg('idle', '🔎 กำลังหากล่อง ' + esc(p.part_code || p.qr_raw) + '…');
+  api('findByQr', p.qr_raw).then(function (rec) {
+    if (!rec) { beep(false); setMsg('err', '❌ ไม่พบกล่องนี้ใน Location ใดเลย (ยังไม่ได้เก็บเข้า หรือเอาออก/ลบไปแล้ว)<br><span class="small">' + esc(p.part_code || p.qr_raw) + (p.lot_no ? ' · Lot ' + esc(p.lot_no) : '') + '</span>'); return; }
+    beep(true);
+    setMsg('warn', 'พบที่ <b>' + esc(rec.location) + '</b> — ยืนยันการเอาออก');
+    openOutModal(rec, function (res) {
+      setMsg('ok', (res.partial ? '📤 เอาออกบางส่วนแล้ว · เหลือ <b>' + esc(fmtQty(res.qty, res.unit)) + '</b>' : '📤 เอาออกแล้ว') + ' — ' + esc(res.part_code) + ' จาก <b>' + esc(res.location) + '</b>');
+    });
+  }, function (err) { beep(false); setMsg('err', 'ค้นหาไม่ได้: ' + esc(err.message)); });
+}
+
+function openOutModal(rec, onDone) {
+  if (!S.user) { openUserModal(); return; }
+  var hasQty = rec.qty !== '' && rec.qty != null;
+  openModal('<h3>📤 เอาออกจาก <span class="loc-pill">' + esc(rec.location) + '</span></h3>' +
+    '<div class="card-lite"><b>' + esc(rec.part_code || rec.qr_raw) + '</b>' + itemLines(rec) + '</div>' +
+    (hasQty ? '<label>จำนวนที่เอาออก <span class="muted small">(ในกล่องมี ' + esc(fmtQty(rec.qty, rec.unit)) + ')</span></label>' +
+      '<div class="out-qty"><input id="oQty" class="field big" type="number" inputmode="decimal" min="0" step="any" value="' + esc(rec.qty) + '">' +
+      '<button type="button" class="btn" id="oAll">ทั้งหมด</button></div>' +
+      '<p class="muted small" id="oHint">เอาออกทั้งกล่อง — กล่องจะหายจาก Location นี้</p>' : '<p class="muted small">กล่องนี้ไม่มียอด — เอาออกทั้งกล่อง</p>') +
+    '<label>เหตุผล</label>' + OUT_REASONS.map(function (x, i) {
+      return '<label class="radio"><input type="radio" name="oWhy" value="' + esc(x) + '"' + (i === 0 ? ' checked' : '') + '> ' + esc(x) + '</label>';
+    }).join('') +
+    '<input id="oNote" class="field" placeholder="รายละเอียด เช่น เลข MO / ปลายทาง (ถ้ามี)">' +
+    '<div class="actions"><button class="btn" id="mCancel">ยกเลิก</button><button class="btn warn" id="mOk">📤 ยืนยันเอาออก</button></div>');
+  $('mCancel').onclick = closeModal;
+  function readQty() {
+    if (!hasQty) return { full: true, q: '' };
+    var q = parseQtyInput($('oQty').value);
+    return { q: q, full: q != null && q >= Number(rec.qty) - 1e-9 };
+  }
+  if (hasQty) {
+    var hint = function () {
+      var r = readQty();
+      $('oHint').textContent = r.q == null || r.q <= 0 ? 'ใส่จำนวนที่เอาออก' : r.q > Number(rec.qty) + 1e-9 ? 'เกินยอดในกล่อง (' + fmtQty(rec.qty, rec.unit) + ')'
+        : r.full ? 'เอาออกทั้งกล่อง — กล่องจะหายจาก Location นี้' : 'เอาออกบางส่วน — กล่องยังอยู่ เหลือ ' + fmtQty(Math.round((Number(rec.qty) - r.q) * 1000) / 1000, rec.unit);
+    };
+    $('oQty').addEventListener('input', hint);
+    $('oAll').onclick = function () { $('oQty').value = rec.qty; hint(); };
+  }
+  $('mOk').onclick = function () {
+    var r = readQty();
+    if (hasQty && (r.q == null || r.q <= 0 || r.q > Number(rec.qty) + 1e-9)) { toast('จำนวนไม่ถูกต้อง'); $('oQty').focus(); return; }
+    var c = document.querySelector('input[name="oWhy"]:checked');
+    var why = [c ? c.value : '', $('oNote').value.trim()].filter(String).join(': ');
+    var btn = $('mOk'); btn.disabled = true; btn.textContent = 'กำลังบันทึก…';
+    api('outScan', rec.scan_id, S.user, { qty: r.full ? '' : r.q, reason: why }).then(function (res) {
+      beep(true);
+      upsertRecent(res, false); saveRecent();
+      MAP.data = null; // ผังต้องโหลดใหม่
+      closeModal();
+      toast(res.partial ? '📤 เอาออก ' + fmtQty(r.q, rec.unit) + ' · เหลือ ' + fmtQty(res.qty, res.unit) : '📤 เอาออกจาก ' + res.location + ' แล้ว', 3000);
+      if (onDone) onDone(res);
+      refreshScanParts();
+    }, function (err) { beep(false); btn.disabled = false; btn.textContent = '📤 ยืนยันเอาออก'; toast(err.message, 3500); });
+  };
+}
+
 function deleteRecent(id) {
   var r = findRecent(id); if (!r) return;
   if (r.status === 'saved') {
@@ -990,7 +1069,7 @@ function renderHistory() {
       '<select id="fUser" class="field">' + userOptions(f.user) + '</select>' +
       '<div class="ac-wrap"><input id="fQ" class="field" placeholder="ค้นหา รหัส / ชื่อ / Spec / Lot (พิมพ์บางส่วนได้)" autocomplete="off" value="' + esc(f.q) + '">' +
         '<div id="fQSug" class="ac-list hidden"></div></div>' +
-      '<label class="radio"><input type="checkbox" id="fDel"' + (f.includeDeleted ? ' checked' : '') + '> แสดงรายการที่ลบแล้ว</label>' +
+      '<label class="radio"><input type="checkbox" id="fDel"' + (f.includeDeleted ? ' checked' : '') + '> แสดงที่ลบ / เอาออกแล้ว</label>' +
       '<button class="btn primary" id="fGo">ค้นหา</button>' +
       '<button class="btn export-btn" id="fXlsx">⬇️ Export Excel (ตามตัวกรอง)</button>' +
     '</section>' +
@@ -1134,7 +1213,8 @@ var XLSX_COLS = [
   ['qty', 'จำนวน', 9], ['unit', 'หน่วย', 7], ['pkg_ref', 'Package', 10], ['scanned_by', 'ผู้สแกน', 14], ['device', 'เครื่อง', 10],
   ['status', 'สถานะ', 9], ['photos', 'จำนวนรูป', 8], ['location_original', 'Location เดิม', 12], ['qty_original', 'ยอดเดิม', 9],
   ['edited_by', 'แก้ไขล่าสุดโดย', 14], ['edited_at', 'แก้ไขล่าสุดเมื่อ', 19], ['edit_note', 'เหตุผลแก้ไข', 20], ['note', 'หมายเหตุ', 24],
-  ['deleted_by', 'ลบโดย', 12], ['deleted_at', 'ลบเมื่อ', 19], ['delete_reason', 'เหตุผลลบ', 16], ['qr_raw', 'QR', 40], ['scan_id', 'scan_id', 38]
+  ['deleted_by', 'ลบโดย', 12], ['deleted_at', 'ลบเมื่อ', 19], ['delete_reason', 'เหตุผลลบ', 16],
+  ['out_by', 'เอาออกโดย', 12], ['out_at', 'เอาออกเมื่อ', 19], ['out_reason', 'เหตุผลเอาออก', 20], ['out_qty', 'จำนวนที่เอาออก', 10], ['qr_raw', 'QR', 40], ['scan_id', 'scan_id', 38]
 ];
 
 // ชื่อผู้บันทึกที่เป็นการทดสอบ (ทดสอบระบบ, test, Test01 …) — ไม่นำไปใน Excel
@@ -1156,7 +1236,7 @@ function exportExcel() {
       var o = {};
       XLSX_COLS.forEach(function (c) {
         var k = c[0], v = r[k];
-        if (k === 'status') v = r.status === 'deleted' ? 'ลบแล้ว' : 'ใช้งาน';
+        if (k === 'status') v = r.status === 'deleted' ? 'ลบแล้ว' : r.status === 'out' ? 'เอาออกแล้ว' : 'ใช้งาน';
         if (k === 'photos') v = (r.photos || []).length;
         if (k === 'work_date') v = shiftOf(r.scanned_at).date;
         if (k.indexOf('bom_') === 0) { var bi = bomInfo(r.part_code) || {}; v = bi[k.slice(4)] || ''; }
@@ -1175,7 +1255,7 @@ function exportExcel() {
     // สรุปตามพาร์ท (เฉพาะรายการที่ใช้งาน)
     var sum = {};
     d.rows.forEach(function (r) {
-      if (r.status === 'deleted') return;
+      if (r.status === 'deleted' || r.status === 'out') return;
       var key = r.part_code + '|' + r.unit;
       var s = sum[key] || (sum[key] = { part: r.part_code, unit: r.unit, n: 0, qty: 0, locs: {} });
       s.n++; if (typeof r.qty === 'number') s.qty += r.qty; s.locs[r.location] = 1;
@@ -1226,16 +1306,19 @@ function renderHistoryList() {
   if (!d.rows.length) { el.innerHTML = head + '<div class="empty-list muted">ไม่พบรายการ</div>'; return; }
   el.innerHTML = head + (d.rows.length < d.total ? '<p class="muted small">แสดง ' + d.rows.length + ' รายการล่าสุด</p>' : '') +
     d.rows.map(function (r) {
-      var del = r.status === 'deleted';
-      return '<div class="row ' + (del ? 'st-deleted' : '') + '">' +
+      var isOut = r.status === 'out', del = r.status === 'deleted' || isOut;
+      return '<div class="row ' + (isOut ? 'st-out' : del ? 'st-deleted' : '') + '">' +
         '<div class="row-main">' +
-          '<div class="row-top">' + partLink(r, true) + (del ? '<span class="tag deleted">ลบแล้ว</span>' : '') + '</div>' +
+          '<div class="row-top">' + partLink(r, true) + (isOut ? '<span class="tag out">เอาออกแล้ว</span>' : del ? '<span class="tag deleted">ลบแล้ว</span>' : '') + '</div>' +
           itemLines(r, qtyChip(r, !del, 'data-hqty'), locChip(r, !del, 'data-hloc')) +
           '<div class="row-sub muted small"><span>👤 ' + esc(r.scanned_by) + '</span><span>' + esc(r.scanned_at) + '</span>' + photoChip(r.scan_id, r) +
             (shiftOf(r.scanned_at).shift ? '<span class="shift-tag ' + shiftOf(r.scanned_at).shift + '">กะ' + SHIFT_TEXT[shiftOf(r.scanned_at).shift] + '</span>' : '') + '</div>' +
-          (del ? '<div class="row-sub muted small">ลบโดย ' + esc(r.deleted_by) + ' · ' + esc(r.deleted_at) + ' · ' + esc(r.delete_reason) + '</div>' : '') +
+          (isOut ? '<div class="row-sub small out-text">📤 เอาออกโดย ' + esc(r.out_by) + ' · ' + esc(r.out_at) + ' · ' + esc(r.out_reason) +
+              (r.out_qty !== '' ? ' · ' + esc(fmtQty(r.out_qty, r.unit)) : '') + '</div>'
+            : del ? '<div class="row-sub muted small">ลบโดย ' + esc(r.deleted_by) + ' · ' + esc(r.deleted_at) + ' · ' + esc(r.delete_reason) + '</div>' : '') +
         '</div>' +
         (del ? '' : '<div class="row-actions"><button class="btn small" data-cam="' + esc(r.scan_id) + '" aria-label="ถ่ายรูป">📷</button>' +
+          '<button class="btn small warn" data-hout="' + esc(r.scan_id) + '">ออก</button>' +
           '<button class="btn small danger" data-hdel="' + esc(r.scan_id) + '">ลบ</button></div>') +
       '</div>';
     }).join('');
@@ -1246,6 +1329,9 @@ function renderHistoryList() {
   });
   Array.prototype.forEach.call(el.querySelectorAll('[data-hqty]'), function (b) {
     b.onclick = function () { editHistoryQty(d.rows.filter(function (x) { return x.scan_id === b.getAttribute('data-hqty'); })[0]); };
+  });
+  Array.prototype.forEach.call(el.querySelectorAll('[data-hout]'), function (b) {
+    b.onclick = function () { openOutModal(d.rows.filter(function (x) { return x.scan_id === b.getAttribute('data-hout'); })[0], function () { loadHistory(); }); };
   });
   Array.prototype.forEach.call(el.querySelectorAll('[data-hdel]'), function (b) {
     b.onclick = function () {
@@ -1984,7 +2070,7 @@ MAP.q = ''; MAP.findAll = false;
 var TRAIL_N = 10;
 MAP.live = store('pda_map_live') !== '0'; MAP.loadedAt = 0; MAP.fresh = {};
 var MAP_LIVE_MS = 30000;
-var MAP_EV = { create: '🟢 บันทึก', qty: '🔵 แก้ยอด', move: '🟠 ย้าย', move_out: '🟠 ย้ายออก', delete: '🔴 ลบ', photo_add: '🖼 แนบรูป', photo_delete: '🗑 ลบรูป' };
+var MAP_EV = { create: '🟢 บันทึก', qty: '🔵 แก้ยอด', move: '🟠 ย้าย', move_out: '🟠 ย้ายออก', delete: '🔴 ลบ', out: '📤 เอาออก', out_part: '📤 เอาออกบางส่วน', photo_add: '🖼 แนบรูป', photo_delete: '🗑 ลบรูป' };
 var RECENT_MIN = 60; // เคลื่อนไหวภายในกี่นาที = ติดจุดส้มในผัง
 
 // เวลาจากชีต (เวลาไทย 'yyyy-MM-dd HH:mm:ss') → ms
@@ -2630,6 +2716,8 @@ function rpNarrate(cur, prev) {
     : cur.ev === 'move' ? who + ' ย้าย ' + part + q + ' จากช่อง <b>' + esc(cur.from) + '</b> ไปช่อง <b>' + esc(cur.to) + '</b>'
     : cur.ev === 'qty' ? who + ' แก้ยอด ' + part + ' ที่ช่อง <b>' + esc(rpLocOf(cur)) + '</b> จาก ' + esc(fmtQty(cur.qf, cur.unit)) + ' เป็น <b>' + esc(fmtQty(cur.qt, cur.unit)) + '</b>'
     : cur.ev === 'delete' ? who + ' ลบรายการ ' + part + ' ออกจากช่อง <b>' + esc(rpLocOf(cur)) + '</b>'
+    : cur.ev === 'out' ? who + ' เอา ' + part + ' ออกจากช่อง <b>' + esc(rpLocOf(cur)) + '</b>'
+    : cur.ev === 'out_part' ? who + ' เอา ' + part + ' ออกบางส่วนที่ช่อง <b>' + esc(rpLocOf(cur)) + '</b> เหลือ <b>' + esc(fmtQty(cur.qt, cur.unit)) + '</b>'
     : who + ' ' + esc(cur.ev) + ' ' + part;
   var notes = [];
   if (prev) {
@@ -2823,11 +2911,17 @@ function openMapCell(code) {
       return '<div class="row"><div class="row-main"><div class="row-top"><b class="part">' + esc(r.part_code || r.qr_raw) + '</b><span class="tag pending">รอส่ง</span></div>' + itemLines(r) + thumbs(r) + '</div></div>';
     }).concat(rows.map(function (r) {
       return '<div class="row"><div class="row-main"><div class="row-top">' + partLink(r, true) + '</div>' + itemLines(r) + thumbs(r) +
-        '<div class="row-sub muted small"><span>' + fmtWhen(r.scanned_at) + '</span><span>👤 ' + esc(r.scanned_by) + '</span></div></div></div>';
+        '<div class="row-sub muted small"><span>' + fmtWhen(r.scanned_at) + '</span><span>👤 ' + esc(r.scanned_by) + '</span></div>' +
+        '<div class="row-sub"><button class="btn small warn" data-cout="' + esc(r.scan_id) + '">📤 เอาออก</button></div></div></div>';
     }));
     el.className = '';
     el.innerHTML = items.length ? '<p class="muted small">' + items.length + ' กล่อง</p>' + items.join('') : '<div class="empty-list muted">ยังไม่มีของในช่องนี้</div>';
     bindTimelineLinks(el);
+    Array.prototype.forEach.call(el.querySelectorAll('[data-cout]'), function (b) {
+      b.onclick = function () {
+        openOutModal(byId[b.getAttribute('data-cout')], function () { if (typeof loadMap === 'function' && isMapView()) loadMap(); openMapCell(code); });
+      };
+    });
     // รูปของแต่ละกล่อง: โหลดทีละรูป · แตะเพื่อดูเต็มจอ/ซูม แล้ว "กลับ" มาหน้าช่องนี้
     Array.prototype.forEach.call(el.querySelectorAll('img[data-cpid]'), function (img) {
       loadPhoto(img.getAttribute('data-cpid')).then(function (data) { img.classList.remove('loading'); if (data) img.src = data; else img.classList.add('fail'); },
@@ -2849,6 +2943,8 @@ var TL_EVENTS = {
   qty: { icon: '🔵', cls: 'ev-qty', label: 'แก้ยอด' },
   move: { icon: '🟠', cls: 'ev-move', label: 'ย้าย Location' },
   delete: { icon: '🔴', cls: 'ev-delete', label: 'ลบ' },
+  out: { icon: '📤', cls: 'ev-out', label: 'เอาออก' },
+  out_part: { icon: '📤', cls: 'ev-out', label: 'เอาออกบางส่วน' },
   photo_add: { icon: '🖼', cls: 'ev-photo', label: 'แนบรูป' },
   photo_delete: { icon: '🗑', cls: 'ev-photo', label: 'ลบรูป' }
 };
@@ -2871,6 +2967,8 @@ function tlDetail(e) {
     case 'qty': return esc(fmtQty(e.qty_from, u)) + ' → <b>' + esc(fmtQty(e.qty_to, u)) + '</b>';
     case 'move': return esc(e.location_from) + ' → <b>' + esc(e.location_to) + '</b>';
     case 'delete': return e.location_from ? 'จาก ' + esc(e.location_from) : '';
+    case 'out': return 'จาก <b>' + esc(e.location_from) + '</b>' + (e.qty_from !== '' ? ' · ' + esc(fmtQty(e.qty_from, u)) : '');
+    case 'out_part': return 'ที่ <b>' + esc(e.location_from) + '</b> · ' + esc(fmtQty(e.qty_from, u)) + ' → <b>' + esc(fmtQty(e.qty_to, u)) + '</b>';
     default: return '';
   }
 }
@@ -2889,11 +2987,11 @@ function openTimeline(scanId, back) {
   $('mCancel').onclick = closeModal;
   api('getTimeline', scanId).then(function (d) {
     if ($('modal').classList.contains('hidden')) return;
-    var r = d.record, del = r.status === 'deleted';
+    var r = d.record, del = r.status === 'deleted' || r.status === 'out';
     var head = '<div class="tl-head' + (del ? ' deleted' : '') + '">' +
       '<div class="tl-part">' + esc(r.part_code || r.qr_raw) + '</div>' + bomLine(r.part_code) +
       '<div class="row-sub">' + (r.lot_no ? '<span>Lot ' + esc(r.lot_no) + '</span>' : '') + (r.pkg_ref ? '<span>Pkg ' + esc(r.pkg_ref) + '</span>' : '') + '</div>' +
-      '<div class="tl-now">' + (del ? '<span class="tag deleted">ลบแล้ว</span>'
+      '<div class="tl-now">' + (del ? (r.status === 'out' ? '<span class="tag out">เอาออกแล้ว</span>' : '<span class="tag deleted">ลบแล้ว</span>')
         : 'ตอนนี้อยู่ <span class="loc-pill">' + esc(r.location) + '</span> · <b>' + esc(fmtQty(r.qty, r.unit) || '-') + '</b>') + '</div></div>';
     var list = d.events.map(function (e) {
       var t = TL_EVENTS[e.event] || { icon: '•', cls: '', label: e.event };

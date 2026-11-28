@@ -693,3 +693,14 @@ main.view-kd > .map-top, .map-top.tall { position: static; }
 .kd-opt > .small { width: 64px; flex: none; color: var(--muted); }
 .kd-opt .seg { margin: 0; flex: 1; flex-wrap: nowrap; }
 .kd-opt .seg button { flex: 1; padding: 6px 8px; font-size: 14px; white-space: nowrap; }
+/* เอาออกจาก Location */
+.io-seg { margin: 0 0 10px; }
+.io-seg button { flex: 1; padding: 10px 6px; }
+.io-seg button.active.out { background: var(--amber); border-color: var(--amber); }
+.out-card { background: var(--amber-soft); border: 2px solid var(--amber); color: var(--amber); border-radius: 14px; padding: 12px; text-align: center; margin-bottom: 12px; }
+.out-card .small { color: var(--ink); margin-top: 4px; }
+.out-qty { display: flex; gap: 8px; } .out-qty .field { flex: 1; }
+.tag.out { background: var(--amber-soft); color: var(--amber); }
+.row.st-out { border-left-color: var(--amber); opacity: .75; }
+.out-text { color: var(--amber); }
+.tl-item.ev-out .tl-body { border-left-color: var(--amber); }
