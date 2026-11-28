@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261128-0303'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261128-0320'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -993,7 +993,8 @@ function outLookup(text, chk) {
   }, function (err) { beep(false); setMsg('err', 'ค้นหาไม่ได้: ' + esc(err.message)); });
 }
 
-function openOutModal(rec, onDone) {
+// onBack: กลับไปหน้าก่อน (เช่น หน้าช่องในผัง) ทั้งตอนยกเลิกและหลังบันทึก — ไม่ปิดหน้าต่างทิ้ง
+function openOutModal(rec, onDone, onBack) {
   if (!S.user) { openUserModal(); return; }
   var hasQty = rec.qty !== '' && rec.qty != null;
   openModal('<h3>📤 เอาออกจาก <span class="loc-pill">' + esc(rec.location) + '</span></h3>' +
@@ -1009,8 +1010,8 @@ function openOutModal(rec, onDone) {
     '<div class="ac-wrap"><input id="oJob" class="field" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="พิมพ์หรือแตะเพื่อเลือก เลข Job / รุ่น"><div id="oJobSug" class="ac-list hidden"></div></div>' +
     '<div id="oJobInfo" class="small muted job-info"></div>' +
     '<input id="oNote" class="field" placeholder="รายละเอียดอื่น เช่น ปลายทาง (ถ้ามี)">' +
-    '<div class="actions"><button class="btn" id="mCancel">ยกเลิก</button><button class="btn warn" id="mOk">📤 ยืนยันเอาออก</button></div>');
-  $('mCancel').onclick = closeModal;
+    '<div class="actions"><button class="btn" id="mCancel">' + (onBack ? '← กลับ' : 'ยกเลิก') + '</button><button class="btn warn" id="mOk">📤 ยืนยันเอาออก</button></div>');
+  $('mCancel').onclick = onBack || closeModal;
   bindJobPicker();
   function readQty() {
     if (!hasQty) return { full: true, q: '' };
@@ -1036,8 +1037,9 @@ function openOutModal(rec, onDone) {
     api('outScan', rec.scan_id, S.user, { qty: r.full ? '' : r.q, reason: why, job: job }).then(function (res) {
       beep(true);
       upsertRecent(res, false); saveRecent();
-      MAP.data = null; // ผังต้องโหลดใหม่
-      closeModal();
+      // ผังโหลดใหม่เบื้องหลัง (ไม่ล้างข้อมูลเดิม กันหน้าผังกระโดดกลับไปบนสุด)
+      MAP.loadedAt = 0; if (isMapView()) loadMap();
+      if (!onBack) closeModal();
       toast(res.partial ? '📤 เอาออก ' + fmtQty(r.q, rec.unit) + ' · เหลือ ' + fmtQty(res.qty, res.unit) : '📤 เอาออกจาก ' + res.location + ' แล้ว', 3000);
       if (onDone) onDone(res);
       refreshScanParts();
@@ -2929,7 +2931,7 @@ function rpSummary() {
   el.innerHTML = parts.map(function (x) { return '<span>' + x + '</span>'; }).join('');
 }
 
-function openMapCell(code) {
+function openMapCell(code, scrollTop) {
   var local = S.recent.filter(function (r) { return r.status === 'pending' && r.location === code; });
   var mi = MAP.data && MAP.data.map && MAP.data.map[code];
   openModal('<h3>Location <span class="loc-pill">' + esc(code) + '</span></h3>' +
@@ -2962,10 +2964,13 @@ function openMapCell(code) {
     }));
     el.className = '';
     el.innerHTML = items.length ? '<p class="muted small">' + items.length + ' กล่อง</p>' + items.join('') : '<div class="empty-list muted">ยังไม่มีของในช่องนี้</div>';
+    if (scrollTop) { var sh = $('modal').querySelector('.sheet'); if (sh) sh.scrollTop = scrollTop; } // กลับมาที่ตำแหน่งเดิมในรายการ
     bindTimelineLinks(el);
     Array.prototype.forEach.call(el.querySelectorAll('[data-cout]'), function (b) {
       b.onclick = function () {
-        openOutModal(byId[b.getAttribute('data-cout')], function () { if (typeof loadMap === 'function' && isMapView()) loadMap(); openMapCell(code); });
+        var sh = $('modal').querySelector('.sheet'), top = sh ? sh.scrollTop : 0;
+        var back = function () { openMapCell(code, top); };
+        openOutModal(byId[b.getAttribute('data-cout')], back, back);
       };
     });
     // รูปของแต่ละกล่อง: โหลดทีละรูป · แตะเพื่อดูเต็มจอ/ซูม แล้ว "กลับ" มาหน้าช่องนี้
