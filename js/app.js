@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261128-0320'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261128-0542'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -1399,6 +1399,13 @@ function openModal(html, locked) {
   var m = $('modal');
   m.innerHTML = '<div class="sheet">' + html + '</div>';
   m.classList.remove('hidden');
+  m._openedAt = Date.now();
+  // กันแตะทะลุ: หลังเปลี่ยนหน้าต่าง ช่วง 0.6 วินาทีแรกไม่รับการแตะใดๆ ในหน้าต่างใหม่ (ปุ่มหรือพื้นหลัง)
+  // เช่น แตะ "ยืนยันเอาออก" แล้วนิ้ว/คลิกซ้ำไปโดนปุ่ม "ตั้งเป็น Location ปัจจุบัน" ที่ขึ้นมาตรงตำแหน่งเดิม → เด้งไปหน้าสแกน
+  if (!m._guard) {
+    m._guard = true;
+    m.addEventListener('click', function (e) { if (Date.now() - (m._openedAt || 0) < 600) { e.stopPropagation(); e.preventDefault(); } }, true);
+  }
   m.onclick = function (e) { if (e.target === m && !locked) closeModal(); };
 }
 function closeModal() {
@@ -2931,7 +2938,8 @@ function rpSummary() {
   el.innerHTML = parts.map(function (x) { return '<span>' + x + '</span>'; }).join('');
 }
 
-function openMapCell(code, scrollTop) {
+var CELL_CACHE = {}; // รายการกล่องล่าสุดของแต่ละช่อง — กลับมาหน้าช่องแล้วแสดงทันที (ไม่ต้องรอโหลด หน้าต่างไม่หด)
+function openMapCell(code, scrollTop, dropId) {
   var local = S.recent.filter(function (r) { return r.status === 'pending' && r.location === code; });
   var mi = MAP.data && MAP.data.map && MAP.data.map[code];
   openModal('<h3>Location <span class="loc-pill">' + esc(code) + '</span></h3>' +
@@ -2944,9 +2952,9 @@ function openMapCell(code, scrollTop) {
     S.location = code; store('pda_loc', code);
     closeModal(); S.view = 'scan'; render(); toast('ตั้ง Location เป็น ' + code);
   };
-  api('listScans', { location: code, limit: 200 }).then(function (d) {
+  function draw(rows, keepScroll) {
     var el = $('cellOut'); if (!el) return;
-    var rows = d.rows.filter(function (r) { return r.location === code; });
+    var sh0 = $('modal').querySelector('.sheet'), prevTop = sh0 ? sh0.scrollTop : 0;
     var byId = {};
     local.concat(rows).forEach(function (r) { byId[r.scan_id] = r; });
     function thumbs(r) {
@@ -2964,13 +2972,14 @@ function openMapCell(code, scrollTop) {
     }));
     el.className = '';
     el.innerHTML = items.length ? '<p class="muted small">' + items.length + ' กล่อง</p>' + items.join('') : '<div class="empty-list muted">ยังไม่มีของในช่องนี้</div>';
-    if (scrollTop) { var sh = $('modal').querySelector('.sheet'); if (sh) sh.scrollTop = scrollTop; } // กลับมาที่ตำแหน่งเดิมในรายการ
+    var shx = $('modal').querySelector('.sheet');
+    if (shx) shx.scrollTop = keepScroll ? prevTop : (scrollTop || 0); // กลับมาที่ตำแหน่งเดิมในรายการ
     bindTimelineLinks(el);
     Array.prototype.forEach.call(el.querySelectorAll('[data-cout]'), function (b) {
       b.onclick = function () {
         var sh = $('modal').querySelector('.sheet'), top = sh ? sh.scrollTop : 0;
-        var back = function () { openMapCell(code, top); };
-        openOutModal(byId[b.getAttribute('data-cout')], back, back);
+        var id = b.getAttribute('data-cout');
+        openOutModal(byId[id], function (res) { openMapCell(code, top, res && !res.partial ? id : ''); }, function () { openMapCell(code, top); });
       };
     });
     // รูปของแต่ละกล่อง: โหลดทีละรูป · แตะเพื่อดูเต็มจอ/ซูม แล้ว "กลับ" มาหน้าช่องนี้
@@ -2983,8 +2992,15 @@ function openMapCell(code, scrollTop) {
         viewPhoto(img.src, sid, byId[sid], function () { openMapCell(code); });
       };
     });
+  }
+  var cached = CELL_CACHE[code];
+  if (cached) draw(cached.filter(function (r) { return r.scan_id !== dropId; }), false);
+  api('listScans', { location: code, limit: 200 }).then(function (d) {
+    var rows = d.rows.filter(function (r) { return r.location === code; });
+    CELL_CACHE[code] = rows;
+    draw(rows, !!cached); // มีรายการเดิมแสดงอยู่แล้ว → อัปเดตโดยคงตำแหน่งเลื่อน
   }, function (err) {
-    var el = $('cellOut'); if (el) { el.className = 'msg err'; el.textContent = err.message; }
+    var el = $('cellOut'); if (el && !cached) { el.className = 'msg err'; el.textContent = err.message; }
   });
 }
 
