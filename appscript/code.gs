@@ -10,16 +10,16 @@ const SHEET_NAME = 'Scans';
 const HEADERS = ['scan_id', 'scanned_at', 'saved_at', 'location', 'qr_raw', 'part_code', 'lot_no', 'qty', 'unit',
                  'pkg_ref', 'scanned_by', 'device', 'status', 'deleted_by', 'deleted_at', 'delete_reason',
                  'qty_original', 'edited_by', 'edited_at', 'edit_note', 'location_original', 'note',
-                 'out_by', 'out_at', 'out_reason', 'out_qty'];
+                 'out_by', 'out_at', 'out_reason', 'out_qty', 'out_job'];
 // รายการที่ไม่อยู่ใน Location แล้ว: deleted = ลบ (บันทึกผิด) · out = เอาออก (เบิก/ย้ายออกจริง)
 function gone_(status) { status = String(status || ''); return status === 'deleted' || status === 'out'; }
 // คอลัมน์ที่ต้องเก็บเป็นข้อความ (กันเลข 0 นำหน้าหาย / กัน Sheets แปลงเป็นวันที่หรือตัวเลข)
-const TEXT_COLS = ['scan_id', 'location', 'location_original', 'qr_raw', 'part_code', 'lot_no', 'pkg_ref', 'scanned_by', 'device', 'out_by'];
+const TEXT_COLS = ['scan_id', 'location', 'location_original', 'qr_raw', 'part_code', 'lot_no', 'pkg_ref', 'scanned_by', 'device', 'out_by', 'out_job'];
 const TZ = 'Asia/Bangkok';
 const MAX_BATCH = 50;
 
 // ======================= Web App =======================
-const API_ACTIONS = { ping: ping, outScan: outScan, saveScans: saveScans, listScans: listScans, deleteScan: deleteScan, updateQty: updateQty, updateLocation: updateLocation, findByQr: findByQr, findSamePkg: findSamePkg, findPackage: findPackage, getScans: getScans, getTimeline: getTimeline, getPartPackages: getPartPackages, getLocationMap: getLocationMap, getLocationEvents: getLocationEvents,
+const API_ACTIONS = { ping: ping, outScan: outScan, getOpenJobs: getOpenJobs, saveScans: saveScans, listScans: listScans, deleteScan: deleteScan, updateQty: updateQty, updateLocation: updateLocation, findByQr: findByQr, findSamePkg: findSamePkg, findPackage: findPackage, getScans: getScans, getTimeline: getTimeline, getPartPackages: getPartPackages, getLocationMap: getLocationMap, getLocationEvents: getLocationEvents,
   uploadPhoto: uploadPhoto, getPhoto: getPhoto, deletePhoto: deletePhoto,
   getCountState: getCountState, setCountRound: setCountRound, markBinCounted: markBinCounted, getKingdeeMoves: getKingdeeMoves, getBinAges: getBinAges,
   getCountProfile: getCountProfile, saveCountProfile: saveCountProfile, saveCountSample: saveCountSample,
@@ -117,7 +117,7 @@ function toClient_(o) {
     edited_by: String(o.edited_by || ''), edited_at: fmt_(o.edited_at), edit_note: String(o.edit_note || ''),
     location_original: String(o.location_original || ''), note: String(o.note || ''),
     out_by: String(o.out_by || ''), out_at: fmt_(o.out_at), out_reason: String(o.out_reason || ''),
-    out_qty: o.out_qty === '' || o.out_qty == null ? '' : Number(o.out_qty)
+    out_qty: o.out_qty === '' || o.out_qty == null ? '' : Number(o.out_qty), out_job: String(o.out_job || '')
   };
 }
 
@@ -493,7 +493,7 @@ function outScan(scanId, by, opt) {
   opt = opt || {};
   const id = clean_(scanId, 64);
   by = clean_(by, 60);
-  const reason = clean_(opt.reason, 200);
+  const reason = clean_(opt.reason, 200), job = clean_(opt.job, 60);
   if (!id) throw new Error('ไม่พบรหัสรายการ');
   if (!by) throw new Error('กรุณาระบุชื่อผู้เอาออก');
   if (!reason) throw new Error('กรุณาเลือกเหตุผล');
@@ -512,16 +512,16 @@ function outScan(scanId, by, opt) {
     const now = new Date(), set = {};
     const full = q == null || cur == null || q >= cur - 1e-9;
     if (full) {
-      Object.assign(set, { status: 'out', out_by: by, out_at: now, out_reason: reason, out_qty: cur == null ? (q == null ? '' : q) : cur });
+      Object.assign(set, { status: 'out', out_by: by, out_at: now, out_reason: reason, out_qty: cur == null ? (q == null ? '' : q) : cur, out_job: job });
     } else {
       const left = Math.round((cur - q) * 1000) / 1000;
-      Object.assign(set, { qty: left, edited_by: by, edited_at: now, edit_note: 'เอาออก ' + q + ': ' + reason });
+      Object.assign(set, { qty: left, edited_by: by, edited_at: now, edit_note: 'เอาออก ' + q + ': ' + reason + (job ? ' · Job ' + job : '') });
       if (row.qty_original === '' || row.qty_original == null) set.qty_original = cur;
     }
     Object.keys(set).forEach(function (k) { sh.getRange(row._row, HEADERS.indexOf(k) + 1).setValue(set[k]); row[k] = set[k]; });
     logEvents_([{ scan_id: id, event: full ? 'out' : 'out_part', part_code: row.part_code, qr_raw: row.qr_raw, location_from: row.location,
                   qty_from: cur == null ? '' : cur, qty_to: full ? 0 : row.qty, unit: row.unit, by: by, at: now,
-                  note: reason + (full ? '' : ' · เอาออก ' + q + ' ' + row.unit) }]);
+                  note: reason + (job ? ' · Job ' + job : '') + (full ? '' : ' · เอาออก ' + q + ' ' + row.unit), ref: job }]);
     const rec = toClient_(row);
     rec.partial = !full;
     return rec;
@@ -1572,4 +1572,50 @@ function scrapShareOldPhotos_(force) {
 function shareScrapPhotosFromMenu() {
   const r = scrapShareOldPhotos_(true);
   SpreadsheetApp.getUi().alert('แชร์รูป Scrap แล้ว ' + r.shared + ' รูป' + (r.failed ? ' · ไม่สำเร็จ ' + r.failed + ' รูป (ไฟล์ถูกลบหรือนโยบายองค์กรไม่อนุญาต)' : ''));
+}
+
+// ======================= Job order ที่ยังไม่ปิด (จากระบบ Job order tracking) =======================
+// แหล่งข้อมูล = ชีต "Plan" ของสเปรดชีต ลงยอด H9 ที่ Publish เป็น CSV (เดียวกับที่ jrh91234/Job-order-tracking ใช้)
+// เปลี่ยนแหล่งได้ด้วย Script Property JOB_PLAN_CSV_URL · ปิด = คอลัมน์ Status เป็น Closed / Close / Archive(d)
+const JOB_PLAN_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRlXWxz5TKmlYhh7oxo3Fz2KgWK36xlJD8k9NTNK6XUFs5c1RRnYIkAYizQUzJHJofOGFAQaVvy47gT/pub?output=csv&gid=1416776201';
+const JOB_CACHE_KEY = 'open_jobs_v1';
+
+function getOpenJobs(force) {
+  const cache = CacheService.getScriptCache();
+  if (!force) {
+    const hit = cache.get(JOB_CACHE_KEY);
+    if (hit) { try { return JSON.parse(hit); } catch (e) { /* แคชเสีย → ดึงใหม่ */ } }
+  }
+  const url = PropertiesService.getScriptProperties().getProperty('JOB_PLAN_CSV_URL') || JOB_PLAN_CSV_URL;
+  const res = UrlFetchApp.fetch(url + (url.indexOf('?') >= 0 ? '&' : '?') + '_t=' + Date.now(), { muteHttpExceptions: true, followRedirects: true });
+  if (res.getResponseCode() !== 200) throw new Error('ดึงรายการ Job order ไม่ได้ (HTTP ' + res.getResponseCode() + ')');
+  const rows = Utilities.parseCsv(res.getContentText());
+  if (!rows.length) return { jobs: [], at: fmt_(new Date()) };
+  const head = rows[0].map(function (h) { return String(h || '').trim(); });
+  const low = head.map(function (h) { return h.toLowerCase(); });
+  const find = function (pred) { for (let i = 0; i < head.length; i++) if (pred(head[i], low[i])) return i; return -1; };
+  let jc = find(function (h) { return h.indexOf('Job order No.') >= 0; });
+  if (jc < 0) jc = find(function (h, l) { return l.indexOf('job order') >= 0 || l.indexOf('job no') >= 0; });
+  let mc = find(function (h) { return h === 'Order model'; });
+  if (mc < 0) mc = find(function (h, l) { return l.indexOf('model') >= 0; });
+  let pc = find(function (h) { return h.indexOf('Plan จำนวน') >= 0; });
+  if (pc < 0) pc = find(function (h, l) { return l.indexOf('plan') >= 0; });
+  const ac = find(function (h, l) { return l === 'actual'; });
+  const sc = find(function (h, l) { return ['status', 'isclosed', 'state', 'job status', 'สถานะ'].indexOf(l) >= 0; });
+  const dc = find(function (h, l) { return l === 'date' || l.indexOf('date') === 0 || h.indexOf('วันที่') >= 0; });
+  if (jc < 0) throw new Error('ไม่พบคอลัมน์ Job order ในชีต Plan');
+  const seen = {}, jobs = [];
+  for (let i = rows.length - 1; i >= 1; i--) { // ล่าสุดก่อน
+    const r = rows[i], no = String(r[jc] || '').trim();
+    if (!no || seen[no]) continue;
+    const st = sc >= 0 ? String(r[sc] || '').trim().toLowerCase() : '';
+    if (st === 'closed' || st === 'close' || st === 'archive' || st === 'archived') { seen[no] = 1; continue; }
+    seen[no] = 1;
+    const num = function (c) { if (c < 0) return ''; const n = Number(String(r[c] || '').replace(/,/g, '')); return isNaN(n) ? '' : n; };
+    jobs.push([no, mc >= 0 ? String(r[mc] || '').trim() : '', num(pc), num(ac), dc >= 0 ? String(r[dc] || '').trim() : '']);
+    if (jobs.length >= 800) break;
+  }
+  const out = { jobs: jobs, at: fmt_(new Date()) };
+  try { cache.put(JOB_CACHE_KEY, JSON.stringify(out), 600); } catch (e) { /* ใหญ่เกินแคช → ข้าม */ }
+  return out;
 }

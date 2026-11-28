@@ -1,7 +1,7 @@
 // ======================= PDA Location Scan — หน้าจอหลัก =======================
 // ใช้กับ Zebra DataWedge แบบ Keystroke output + ENTER: ค่าที่สแกนจะถูก "พิมพ์" ลงช่องสแกนแล้วกด Enter ให้เอง
 
-var APP_VERSION = '20261128-0252'; // ตั้งโดย tools/bump-version.py
+var APP_VERSION = '20261128-0303'; // ตั้งโดย tools/bump-version.py
 var MAX_RECENT = 200;
 var SYNC_BATCH = 20;
 
@@ -935,6 +935,47 @@ function dropLocal(id) {
 // ======================= เอาออกจาก Location =======================
 // ต่างจาก "ลบ" (บันทึกผิด): เอาออก = ของออกจากช่องจริง (เบิกไปผลิต / ย้ายไปคลังอื่น) · เอาออกบางส่วนได้ (ลดยอด กล่องยังอยู่)
 var OUT_REASONS = ['เบิกไปผลิต', 'ย้ายไปคลังอื่น', 'ส่งคืน Supplier', 'ของเสีย / Scrap', 'อื่นๆ'];
+// Job order ที่ยังไม่ปิด (จากชีต Plan ของระบบ Job order tracking) — [เลข Job, รุ่น, Plan, Actual, วันที่]
+var OUTJ = { list: storeJson('pda_open_jobs') || [], at: 0, loading: null };
+function loadOpenJobs() {
+  if (Date.now() - OUTJ.at < 5 * 60000) return Promise.resolve(OUTJ.list);
+  if (OUTJ.loading) return OUTJ.loading;
+  OUTJ.loading = api('getOpenJobs').then(function (d) {
+    OUTJ.list = d.jobs || []; OUTJ.at = Date.now(); OUTJ.loading = null;
+    storeJson('pda_open_jobs', OUTJ.list); return OUTJ.list;
+  }, function (err) { OUTJ.loading = null; throw err; });
+  return OUTJ.loading;
+}
+function jobInfo(no) { no = String(no || '').trim().toUpperCase(); return OUTJ.list.filter(function (j) { return String(j[0]).toUpperCase() === no; })[0] || null; }
+function jobLine(j) { return esc(j[1] || '-') + (j[2] !== '' ? ' · Plan ' + esc(fmtQty(j[2])) : '') + (j[3] !== '' ? ' · ทำแล้ว ' + esc(fmtQty(j[3])) : ''); }
+function bindJobPicker() {
+  var inp = $('oJob'), box = $('oJobSug'), info = $('oJobInfo');
+  function hide() { box.classList.add('hidden'); box.innerHTML = ''; }
+  function showInfo() {
+    var v = inp.value.trim(), j = jobInfo(v);
+    info.innerHTML = !v ? (OUTJ.list.length ? OUTJ.list.length + ' Job ที่ยังไม่ปิด — แตะช่องเพื่อเลือก' : '')
+      : j ? '✅ ' + jobLine(j) : '<span class="warn-text small">⚠ ไม่อยู่ในรายการ Job ที่ยังไม่ปิด (บันทึกได้ แต่ตรวจเลขอีกครั้ง)</span>';
+  }
+  function show() {
+    var q = inp.value.trim().toUpperCase();
+    var hits = OUTJ.list.filter(function (j) { return !q || String(j[0]).toUpperCase().indexOf(q) >= 0 || String(j[1]).toUpperCase().indexOf(q) >= 0; }).slice(0, 30);
+    if (!hits.length) { hide(); return; }
+    box.innerHTML = hits.map(function (j) {
+      return '<button type="button" class="ac-item" data-job="' + esc(j[0]) + '"><b>' + markQ(j[0], q) + '</b><span class="small muted">' + jobLine(j) + (j[4] ? ' · ' + esc(j[4]) : '') + '</span></button>';
+    }).join('');
+    box.classList.remove('hidden');
+    Array.prototype.forEach.call(box.querySelectorAll('[data-job]'), function (b) {
+      b.onmousedown = function (e) { e.preventDefault(); };
+      b.onclick = function () { inp.value = b.getAttribute('data-job'); hide(); showInfo(); };
+    });
+  }
+  inp.addEventListener('focus', show);
+  inp.addEventListener('input', function () { show(); showInfo(); });
+  inp.addEventListener('blur', function () { setTimeout(hide, 150); });
+  info.innerHTML = '⏳ กำลังโหลด Job ที่ยังไม่ปิด…';
+  loadOpenJobs().then(function () { if ($('oJob') === inp) { showInfo(); if (document.activeElement === inp) show(); } },
+    function (err) { if ($('oJob') === inp) info.innerHTML = '<span class="warn-text small">โหลดรายการ Job ไม่ได้ (' + esc(err.message) + ') — พิมพ์เลขเองได้</span>'; });
+}
 
 function outLookup(text, chk) {
   if (chk && chk.error) { beep(false); setMsg('err', '❌ ' + esc(chk.error)); return; }
@@ -964,9 +1005,13 @@ function openOutModal(rec, onDone) {
     '<label>เหตุผล</label>' + OUT_REASONS.map(function (x, i) {
       return '<label class="radio"><input type="radio" name="oWhy" value="' + esc(x) + '"' + (i === 0 ? ' checked' : '') + '> ' + esc(x) + '</label>';
     }).join('') +
-    '<input id="oNote" class="field" placeholder="รายละเอียด เช่น เลข MO / ปลายทาง (ถ้ามี)">' +
+    '<label>Job order / MO <span class="muted small">(เลือกจาก Job ที่ยังไม่ปิด)</span></label>' +
+    '<div class="ac-wrap"><input id="oJob" class="field" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="พิมพ์หรือแตะเพื่อเลือก เลข Job / รุ่น"><div id="oJobSug" class="ac-list hidden"></div></div>' +
+    '<div id="oJobInfo" class="small muted job-info"></div>' +
+    '<input id="oNote" class="field" placeholder="รายละเอียดอื่น เช่น ปลายทาง (ถ้ามี)">' +
     '<div class="actions"><button class="btn" id="mCancel">ยกเลิก</button><button class="btn warn" id="mOk">📤 ยืนยันเอาออก</button></div>');
   $('mCancel').onclick = closeModal;
+  bindJobPicker();
   function readQty() {
     if (!hasQty) return { full: true, q: '' };
     var q = parseQtyInput($('oQty').value);
@@ -987,7 +1032,8 @@ function openOutModal(rec, onDone) {
     var c = document.querySelector('input[name="oWhy"]:checked');
     var why = [c ? c.value : '', $('oNote').value.trim()].filter(String).join(': ');
     var btn = $('mOk'); btn.disabled = true; btn.textContent = 'กำลังบันทึก…';
-    api('outScan', rec.scan_id, S.user, { qty: r.full ? '' : r.q, reason: why }).then(function (res) {
+    var job = $('oJob').value.trim().toUpperCase();
+    api('outScan', rec.scan_id, S.user, { qty: r.full ? '' : r.q, reason: why, job: job }).then(function (res) {
       beep(true);
       upsertRecent(res, false); saveRecent();
       MAP.data = null; // ผังต้องโหลดใหม่
@@ -1214,7 +1260,7 @@ var XLSX_COLS = [
   ['status', 'สถานะ', 9], ['photos', 'จำนวนรูป', 8], ['location_original', 'Location เดิม', 12], ['qty_original', 'ยอดเดิม', 9],
   ['edited_by', 'แก้ไขล่าสุดโดย', 14], ['edited_at', 'แก้ไขล่าสุดเมื่อ', 19], ['edit_note', 'เหตุผลแก้ไข', 20], ['note', 'หมายเหตุ', 24],
   ['deleted_by', 'ลบโดย', 12], ['deleted_at', 'ลบเมื่อ', 19], ['delete_reason', 'เหตุผลลบ', 16],
-  ['out_by', 'เอาออกโดย', 12], ['out_at', 'เอาออกเมื่อ', 19], ['out_reason', 'เหตุผลเอาออก', 20], ['out_qty', 'จำนวนที่เอาออก', 10], ['qr_raw', 'QR', 40], ['scan_id', 'scan_id', 38]
+  ['out_by', 'เอาออกโดย', 12], ['out_at', 'เอาออกเมื่อ', 19], ['out_reason', 'เหตุผลเอาออก', 20], ['out_qty', 'จำนวนที่เอาออก', 10], ['out_job', 'Job order', 18], ['qr_raw', 'QR', 40], ['scan_id', 'scan_id', 38]
 ];
 
 // ชื่อผู้บันทึกที่เป็นการทดสอบ (ทดสอบระบบ, test, Test01 …) — ไม่นำไปใน Excel
@@ -1314,7 +1360,7 @@ function renderHistoryList() {
           '<div class="row-sub muted small"><span>👤 ' + esc(r.scanned_by) + '</span><span>' + esc(r.scanned_at) + '</span>' + photoChip(r.scan_id, r) +
             (shiftOf(r.scanned_at).shift ? '<span class="shift-tag ' + shiftOf(r.scanned_at).shift + '">กะ' + SHIFT_TEXT[shiftOf(r.scanned_at).shift] + '</span>' : '') + '</div>' +
           (isOut ? '<div class="row-sub small out-text">📤 เอาออกโดย ' + esc(r.out_by) + ' · ' + esc(r.out_at) + ' · ' + esc(r.out_reason) +
-              (r.out_qty !== '' ? ' · ' + esc(fmtQty(r.out_qty, r.unit)) : '') + '</div>'
+              (r.out_qty !== '' ? ' · ' + esc(fmtQty(r.out_qty, r.unit)) : '') + (r.out_job ? ' · Job <b>' + esc(r.out_job) + '</b>' : '') + '</div>'
             : del ? '<div class="row-sub muted small">ลบโดย ' + esc(r.deleted_by) + ' · ' + esc(r.deleted_at) + ' · ' + esc(r.delete_reason) + '</div>' : '') +
         '</div>' +
         (del ? '' : '<div class="row-actions"><button class="btn small" data-cam="' + esc(r.scan_id) + '" aria-label="ถ่ายรูป">📷</button>' +

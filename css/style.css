@@ -704,3 +704,4 @@ main.view-kd > .map-top, .map-top.tall { position: static; }
 .row.st-out { border-left-color: var(--amber); opacity: .75; }
 .out-text { color: var(--amber); }
 .tl-item.ev-out .tl-body { border-left-color: var(--amber); }
+.job-info { min-height: 18px; margin: 4px 2px 8px; }

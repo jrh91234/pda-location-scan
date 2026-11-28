@@ -37,9 +37,10 @@
 
 7.1 **เอาออกจาก Location (ของออกจริง ต่างจาก "ลบ" ที่ใช้แก้บันทึกผิด):**
    - หน้าสแกน → กด **📤 เอาออก** (ด้านบน) → สแกน QR กล่อง ระบบหาว่ากล่องอยู่ช่องไหน → ใส่จำนวน + เลือกเหตุผล (เบิกไปผลิต / ย้ายไปคลังอื่น / ส่งคืน Supplier / ของเสีย / อื่นๆ) → ยืนยัน · กด **📥 เก็บเข้า Location** เพื่อกลับโหมดปกติ
+   - ช่อง **Job order / MO**: แตะเพื่อเลือกจาก Job ที่ **ยังไม่ปิด** (พิมพ์บางส่วนของเลข Job หรือรุ่นเพื่อกรอง) — ดึงจากชีต **Plan** ที่ระบบ Job order tracking ใช้ (CSV ที่ Publish ไว้, Status = Closed/Close/Archive ถือว่าปิด) ผ่าน Apps Script แคช 10 นาที · เปลี่ยนแหล่งได้ด้วย Script Property `JOB_PLAN_CSV_URL` · พิมพ์เลขที่ไม่อยู่ในรายการก็บันทึกได้ (มีคำเตือน) · เก็บในคอลัมน์ `out_job` และใน Log
    - หรือกด **📤 เอาออก** ที่กล่องในหน้าผัง (แตะช่อง) หรือปุ่ม **ออก** ในหน้าประวัติ
    - **จำนวน = ยอดในกล่อง** → เอาออกทั้งกล่อง (สถานะ `out` กล่องหายจากช่อง/ผัง/ยอดเทียบ Kingdee) · **น้อยกว่า** → เอาออกบางส่วน (ลดยอด กล่องยังอยู่ เก็บยอดเดิมใน `qty_original`)
-   - ชีต `Scans` เพิ่มคอลัมน์ `out_by, out_at, out_reason, out_qty` · Log บันทึก `out` / `out_part` (ดูใน timeline และเล่นย้อนหลังบนผัง) · หน้าประวัติติ๊ก "แสดงที่ลบ / เอาออกแล้ว" เพื่อดูรายการที่เอาออก · กล่องที่เอาออกแล้ว สแกนเก็บเข้าใหม่ได้ (ไม่ถือว่าซ้ำ)
+   - ชีต `Scans` เพิ่มคอลัมน์ `out_by, out_at, out_reason, out_qty, out_job` · Log บันทึก `out` / `out_part` (ดูใน timeline และเล่นย้อนหลังบนผัง) · หน้าประวัติติ๊ก "แสดงที่ลบ / เอาออกแล้ว" เพื่อดูรายการที่เอาออก · กล่องที่เอาออกแล้ว สแกนเก็บเข้าใหม่ได้ (ไม่ถือว่าซ้ำ)
 8. **ถ่าย/แนบรูป:** กด 📷 ที่รายการ (หรือปุ่ม "📷 ถ่ายรูปรายการนี้" ที่ขึ้นหลังสแกนสำเร็จ) เพื่อเปิดกล้อง กดชิป **🖼 n รูป** เพื่อดูรูป ลบรูป หรือ **เลือกจากเครื่อง** (เลือกได้หลายรูป)
    - แอปย่อรูปเป็น JPEG ด้านยาวไม่เกิน 1280px (ประมาณ 100–300KB) ก่อนส่ง
    - ไฟล์เก็บใน Google Drive โฟลเดอร์ **PDA Scan Photos** (ส่วนตัว ไม่เปิดสาธารณะ) และมีรายการในชีต `Photos` (`scan_id`, Location, รหัสสินค้า, ลิงก์ไฟล์)
@@ -208,4 +209,4 @@ dev/                           เซิร์ฟเวอร์ + Apps Script �
 ```
 
 ### คอลัมน์ในชีต `Scans`
-`scan_id, scanned_at, saved_at, location, qr_raw, part_code, lot_no, qty, unit, pkg_ref, scanned_by, device, status, deleted_by, deleted_at, delete_reason, qty_original, edited_by, edited_at, edit_note, location_original, note, out_by, out_at, out_reason, out_qty`
+`scan_id, scanned_at, saved_at, location, qr_raw, part_code, lot_no, qty, unit, pkg_ref, scanned_by, device, status, deleted_by, deleted_at, delete_reason, qty_original, edited_by, edited_at, edit_note, location_original, note, out_by, out_at, out_reason, out_qty, out_job`
